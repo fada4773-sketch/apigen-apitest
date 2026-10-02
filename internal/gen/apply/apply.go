@@ -681,6 +681,14 @@ func (a *applier) leaf(s *openapi3.Schema, dto string, dn *dict.Node, name, op s
 	if dn != nil && dn.Value != nil && a.valid(s, dn.Value, spec.ModePlain) {
 		return dn.Value, true, ""
 	}
+	if dn == nil && name != "" {
+		// an inline schema outside any DTO has no dictionary node; its value
+		// is generated here, seeded by its place so it stays the same
+		r := value.Generate(s, value.Context{Seed: a.opt.Seed, Path: "inline." + op + "." + where, Name: name, Parent: dto})
+		if r.OK && a.valid(s, r.Value, spec.ModePlain) {
+			return r.Value, true, ""
+		}
+	}
 	return nil, false, where
 }
 
@@ -1053,4 +1061,19 @@ func negative(op *spec.Operation) map[string]bool {
 		}
 	}
 	return out
+}
+
+// GenericIDKeys returns the defaults keys that can set the generic path
+// parameter p of op, in the order apply looks them up.
+func GenericIDKeys(op *spec.Operation, p *openapi3.Parameter) []string {
+	var out []string
+	if op.HasOperationID {
+		out = append(out, op.ID+"."+p.Name)
+	}
+	out = append(out, op.Path)
+	out = append(out, resourceKeys(op.Path, p.Name)...)
+	if dto := responseDTO(op); dto != "" {
+		out = append(out, dto+"."+p.Name)
+	}
+	return append(out, p.Name)
 }

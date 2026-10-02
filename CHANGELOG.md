@@ -63,6 +63,16 @@ contain breaking changes, which are listed here.
   also a free one: its schema example and every body, field and list
   element of that type. A key that names a DTO instead of a field is
   reported with this key as a hint.
+- `apitest-gen review` evaluates what apitest and apitest-gen would report
+  (spec findings such as heuristic bindings, missing 401/403, invalid
+  examples and links, cases that cannot be sent, values the generator
+  cannot create, wrong or unused defaults) and proposes a fix for each:
+  defaults entries with their value (`DEFAULT`), keys whose value only the
+  user knows (`CHOOSE`), corrections of the defaults (`EDIT`), and what
+  `apply` or a spec change solves. The proposals go to
+  `defaults.suggested.json` for review; nothing is applied.
+- Inline schemas outside any DTO (e.g. a response `{type: object,
+  properties: …}`) get generated values instead of `EXAMPLE_INCOMPLETE`.
 - Applied defaults are kept in `global-dict.json` (`DICT_FROM_DEFAULTS`),
   except operation-scoped ones, so the dictionary shows the values the spec
   uses and a second run reports nothing.

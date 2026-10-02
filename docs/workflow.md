@@ -312,6 +312,45 @@ go test ./apitest -run TestStarport -v
 
 What apitest checks per case: the status code, the schema, the example (subset by default), and after every write a GET that reads the data back. The report lands in `apitest/apitest-report/TestStarport.md`.
 
+### Review the spec findings
+
+The report also lists **spec findings**: things apitest had to guess or could not test.
+
+```text
+paths./ships/{id}.get.parameters[id]      parameter "id" is resolved heuristically from registerShip (body /Id); make it explicit with x-apitest-bind or links
+paths./ships/{id}.put.parameters[id]      parameter "id" is resolved heuristically from registerShip (body /Id); make it explicit with x-apitest-bind or links
+paths./ships/{id}.delete.parameters[id]   parameter "id" is resolved heuristically from registerShip (body /Id); make it explicit with x-apitest-bind or links
+```
+
+You don't have to fix these by hand. `review` evaluates every finding and proposes a fix:
+
+```sh
+apitest-gen review -spec ../api/openapi.yaml -dict global-dict.json -defaults defaults.json -v
+```
+
+```text
+review: 3 findings; 3 defaults proposed, 0 values to choose, 0 defaults to correct, 0 fixed by apply, 0 to fix in the spec
+  DEFAULT  getShip.id = {"bind":"registerShip","pointer":"/Id"}  (heuristic at paths./ships/{id}.get.parameters[id])
+           → Makes the guess explicit; apply writes it as x-apitest-bind (or a link for a shared parameter). Check that registerShip really returns the body /Id that getShip needs
+  DEFAULT  updateShip.id = {"bind":"registerShip","pointer":"/Id"}  (heuristic at paths./ships/{id}.put.parameters[id])
+  DEFAULT  scrapShip.id = {"bind":"registerShip","pointer":"/Id"}  (heuristic at paths./ships/{id}.delete.parameters[id])
+please review defaults.suggested.json: accept an entry by copying it into defaults.json, or pass both files: -defaults defaults.json,defaults.suggested.json
+```
+
+Nothing has changed yet. `defaults.suggested.json` holds the three bindings as active keys, each with a `$why` comment. Fixes that need a value from you or a change of the spec would be listed as `$choose …`, `$edit`, `$apply` and `$spec`. Review the bindings: `registerShip` returns the new ship with its `Id`, so they are right. Accept them and apply:
+
+```sh
+apitest-gen -spec ../api/openapi.yaml -dict global-dict.json -defaults defaults.json,defaults.suggested.json
+apitest-gen review -spec ../api/openapi.yaml -dict global-dict.json -defaults defaults.json
+```
+
+```text
+review: 0 findings; 0 defaults proposed, 0 values to choose, 0 defaults to correct, 0 fixed by apply, 0 to fix in the spec
+nothing to review
+```
+
+The bindings are now `x-apitest-bind` entries in the spec, so the next report has no spec findings. Keep the accepted keys in `defaults.json` (copy them over, then delete the proposals file), so they survive a regenerated spec. All kinds of findings and their fixes: [configuration.md, 13.9](configuration.md#139-reviewing-findings).
+
 ## 7. Step 5: test against QA
 
 On QA the docks have other codes, and the data differ from the examples. Two things change:
@@ -433,7 +472,8 @@ Pin `apitest-gen` to a version, so a new release does not change the examples be
 | `PARAM_CONFLICT` | one parameter name, different schemas | usually a spec mistake; `operationId.name` in the defaults |
 | `SHARED_PARAM_CONFLICT` | an operation-specific default for a parameter defined once for many operations | define the parameter in the operation, or use a plain default |
 | `EXAMPLE_REPLACED` | an existing example did not fit its schema | nothing; check the spec author's intention |
-| apitest `NOT_BUILDABLE` | a required value is missing | run `apitest-gen check` |
+| apitest `NOT_BUILDABLE` | a required value is missing | run `apitest-gen check`, then `apitest-gen review` for the proposed value |
+| apitest spec findings (`resolved heuristically`, no 401/403, …) | apitest guessed or could not test something | `apitest-gen review`, then accept the proposals |
 | apitest `EXAMPLE_MISMATCH` against a shared environment | real data differ from examples | `CompareMode: CompareSchema` |
 | apitest `DATA_MISMATCH` | the GET after a write returns other values | a real bug, or `x-apitest-ignore` for server-made fields |
 

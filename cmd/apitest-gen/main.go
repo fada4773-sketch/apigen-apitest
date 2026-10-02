@@ -17,6 +17,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/fada4773-sketch/apigen-apitest/internal/gen/apply"
@@ -24,6 +25,7 @@ import (
 	"github.com/fada4773-sketch/apigen-apitest/internal/gen/defaults"
 	"github.com/fada4773-sketch/apigen-apitest/internal/gen/dict"
 	"github.com/fada4773-sketch/apigen-apitest/internal/gen/discover"
+	"github.com/fada4773-sketch/apigen-apitest/internal/gen/review"
 	"github.com/fada4773-sketch/apigen-apitest/internal/gen/yamldoc"
 	"github.com/fada4773-sketch/apigen-apitest/internal/spec"
 )
@@ -35,6 +37,7 @@ Usage:
   apitest-gen dict     -spec <openapi.yaml> [-dict global-dict.json] [flags]
   apitest-gen discover -defaults defaults.json -base-url <url> [-token-env API_TOKEN] [-out defaults.resolved.json]
   apitest-gen check    -spec <openapi.yaml> [-defaults defaults.json]
+  apitest-gen review   -spec <openapi.yaml> [-dict global-dict.json] [-defaults defaults.json] [-out defaults.suggested.json]
 
 Commands:
   apply     (default) update the dictionary, then write missing or invalid
@@ -47,6 +50,11 @@ Commands:
   check     report what keeps apitest from running the spec: cases that
             would be NOT_BUILDABLE and examples that violate their schema;
             exit code 1 if there is any (for CI)
+  review    evaluate what apitest would report (spec findings such as
+            heuristic bindings, cases it cannot send, values the generator
+            cannot create) and propose a fix for each; proposals for
+            defaults.json are written to -out for you to review, nothing
+            is applied
   help      show this help
 
 Flags:
@@ -69,7 +77,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if !strings.HasPrefix(args[0], "-") {
 		cmd, args = args[0], args[1:]
 	}
-	if cmd != "apply" && cmd != "dict" && cmd != "discover" && cmd != "check" {
+	if !slices.Contains([]string{"apply", "dict", "discover", "check", "review"}, cmd) {
 		fmt.Fprintf(stderr, "apitest-gen: unknown command %q; run \"apitest-gen help\"\n", cmd)
 		return 2
 	}
@@ -94,6 +102,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if cmd == "check" {
 		return checkCommand(o, stdout, stderr)
+	}
+	if cmd == "review" {
+		if err := reviewCommand(o, stdout); err != nil {
+			fmt.Fprintf(stderr, "apitest-gen review: %v\n", err)
+			return 1
+		}
+		return 0
 	}
 	o.dictOnly = cmd == "dict"
 	if err := execute(o, stdout); err != nil {
@@ -122,9 +137,13 @@ func flags(name string, out io.Writer) (*flag.FlagSet, *options) {
 	fs.StringVar(&o.dict, "dict", "global-dict.json", "dictionary file; created if it does not exist")
 	fs.StringVar(&o.defaults, "defaults", "defaults.json", "values that win everywhere; several files comma-separated, later ones override earlier ones")
 	outHelp := "write the spec here instead of in place (apply)"
-	if name == "discover" {
+	switch name {
+	case "discover":
 		outHelp = "file for the fetched values"
 		o.out = "defaults.resolved.json"
+	case "review":
+		outHelp = "file for the proposals"
+		o.out = "defaults.suggested.json"
 	}
 	fs.StringVar(&o.out, "out", o.out, outHelp)
 	fs.StringVar(&o.baseURL, "base-url", "", "environment to fetch sources from, e.g. https://api.qa.example/v1")
@@ -250,6 +269,65 @@ func checkCommand(o *options, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// reviewCommand runs "apitest-gen review": it changes neither the spec nor
+// the dictionary and writes the proposals to -out.
+func reviewCommand(o *options, out io.Writer) error {
+	s, err := spec.Load(context.Background(), o.spec)
+	if err != nil {
+		return err
+	}
+	old, _, err := dict.Load(o.dict)
+	if err != nil {
+		return err
+	}
+	d, notes, _ := dict.Build(s, old, dict.Options{Seed: o.seed})
+	defs, err := defaults.LoadAll(o.defaults)
+	if err != nil {
+		return err
+	}
+	doc, err := yamldoc.Load(o.spec)
+	if err != nil {
+		return err
+	}
+	ids := strings.Split(o.genericIDs, ",")
+	// apply in memory only: its problems are reviewed, nothing is saved
+	applied := apply.Apply(doc, s, d, defs, apply.Options{Seed: o.seed, GenericIDs: ids})
+	res := review.Run(review.Input{Spec: s, Dict: d, DictNotes: notes, Defaults: defs, GenericIDs: ids, Apply: applied})
+	fmt.Fprintf(out, "review: %d findings; %d defaults proposed, %d values to choose, %d defaults to correct, %d fixed by apply, %d to fix in the spec\n",
+		len(res.Suggestions), res.Count(review.ActionDefault), res.Count(review.ActionChoose), res.Count(review.ActionEdit), res.Count(review.ActionApply), res.Count(review.ActionSpec))
+	for _, sg := range res.Suggestions {
+		line := sg.Where + ": " + sg.Message
+		if sg.Action == review.ActionDefault {
+			line = fmt.Sprintf("%s = %s  (%s at %s)", sg.Key, compactJSON(sg.Value), sg.Finding, sg.Where)
+		} else if sg.Key != "" {
+			line = fmt.Sprintf("%s  (%s at %s: %s)", sg.Key, sg.Finding, sg.Where, sg.Message)
+		}
+		fmt.Fprintf(out, "  %-8s %s\n", sg.Action, line)
+		if o.verbose && sg.Fix != "" {
+			fmt.Fprintf(out, "           → %s\n", strings.ReplaceAll(sg.Fix, "\n", "\n             "))
+		}
+	}
+	if len(res.Suggestions) == 0 {
+		fmt.Fprintln(out, "nothing to review")
+		return nil
+	}
+	if o.dryRun {
+		fmt.Fprintln(out, "dry run: nothing written")
+		return nil
+	}
+	if err := os.WriteFile(o.out, res.File(), 0o600); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "please review %s: accept an entry by copying it into %s, or pass both files: -defaults %s,%s\n",
+		o.out, strings.Split(o.defaults, ",")[0], o.defaults, o.out)
+	return nil
+}
+
+func compactJSON(v any) string {
+	b, _ := json.Marshal(v)
+	return string(b)
 }
 
 // report prints a check result and returns the number of problems.
