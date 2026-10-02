@@ -54,6 +54,11 @@ contain breaking changes, which are listed here.
   in error responses and in `components.schemas` (missing ones are not
   added there). Invalid curated named examples are kept and reported as
   `EXAMPLE_NAMED_INVALID`.
+- `defaults.json` values for fields that hold a DTO or a list of DTOs
+  (`"Ship.Pilot": {"Name": "Ada"}`) are merged into the generated value and
+  into existing examples; fields left out keep their values, a list sets
+  the length, readOnly/writeOnly fields are left out where they are not
+  allowed. Previously such keys were ignored.
 - Free objects (`type: object` without `properties`) get `{}`, or entries
   from a typed `additionalProperties`, `minProperties` and `required`,
   instead of `NO_VALUE`.

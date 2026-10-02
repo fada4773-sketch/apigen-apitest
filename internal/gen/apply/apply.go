@@ -475,6 +475,24 @@ func (a *applier) build(ref *openapi3.SchemaRef, dto string, dn *dict.Node, name
 	if ref == nil || ref.Value == nil {
 		return nil, false, name
 	}
+	if name != "" && !isLeaf(ref) {
+		if e := a.defs.Field(dto, op, name); e != nil {
+			gen, ok, _ := a.compose(ref, dto, dn, name, op, mode, depth, stack)
+			if !ok {
+				gen = nil // the default may provide what is missing
+			}
+			if v := a.objectDefault(e, gen, ref, mode, dtoWhere(dto, name)); v != nil {
+				return v, true, ""
+			}
+			return nil, false, dtoWhere(dto, name)
+		}
+	}
+	return a.compose(ref, dto, dn, name, op, mode, depth, stack)
+}
+
+// compose builds the value of one place without a default for the place
+// itself; defaults of nested fields are used.
+func (a *applier) compose(ref *openapi3.SchemaRef, dto string, dn *dict.Node, name, op string, mode spec.Mode, depth int, stack []string) (any, bool, string) {
 	if depth > 20 {
 		return nil, false, name + " (nesting too deep)"
 	}
@@ -587,7 +605,13 @@ func (a *applier) withDefaults(v any, ref *openapi3.SchemaRef, dto string, stack
 				}
 				continue
 			}
-			if nv, ch := a.withDefaults(cv, c, dto, stack, op, mode, where); ch {
+			nv, ch := a.withDefaults(cv, c, dto, stack, op, mode, where)
+			if e := a.defs.Field(dto, op, k); e != nil {
+				if ov := a.objectDefault(e, nv, c, mode, dtoWhere(dto, k)); ov != nil && !reflect.DeepEqual(spec.Normalize(ov), spec.Normalize(cv)) {
+					nv, ch = ov, true
+				}
+			}
+			if ch {
 				out[k], changed = nv, true
 			}
 		}
@@ -640,6 +664,94 @@ func (a *applier) useDefault(e *defaults.Entry, s *openapi3.Schema, mode spec.Mo
 	return v
 }
 
+// objectDefault lays a default for a place that holds a DTO, an object or a
+// list of them over the value built for it (base, nil if none): fields of
+// the default win, the other fields keep their value. Fields the mode must
+// not contain (readOnly in a request, writeOnly in a response) are left out.
+// A result that violates the schema is fatal.
+func (a *applier) objectDefault(e *defaults.Entry, base any, ref *openapi3.SchemaRef, mode spec.Mode, where string) any {
+	v := overlay(base, visible(coerce(e.Value, ref.Value), ref, mode, 0))
+	if errs := a.v.Validate(ref.Value, spec.Normalize(v), mode); len(errs) > 0 {
+		at := ""
+		if errs[0].Pointer != "" {
+			at = errs[0].Pointer + ": "
+		}
+		a.fatal(fmt.Sprintf("DEFAULT_INVALID %s: %q = %s gives a value that violates the schema: %s%s", where, e.Key, compact(e.Value), at, errs[0].Reason))
+		return nil
+	}
+	a.defs.Use(e)
+	return v
+}
+
+// overlay lays top over base: object fields of top win and nested objects
+// are merged; a list in top sets the length, and each of its elements is
+// laid over the element of base at the same index, or over the first one.
+func overlay(base, top any) any {
+	switch t := top.(type) {
+	case map[string]any:
+		b, ok := base.(map[string]any)
+		if !ok {
+			return t
+		}
+		out := make(map[string]any, len(b)+len(t))
+		for k, v := range b {
+			out[k] = v
+		}
+		for k, v := range t {
+			out[k] = overlay(b[k], v)
+		}
+		return out
+	case []any:
+		b, _ := base.([]any)
+		out := make([]any, len(t))
+		for i, v := range t {
+			var tmpl any
+			switch {
+			case i < len(b):
+				tmpl = b[i]
+			case len(b) > 0:
+				tmpl = b[0]
+			}
+			out[i] = overlay(tmpl, v)
+		}
+		return out
+	}
+	return top
+}
+
+// visible removes the fields a mode must not contain from a default:
+// readOnly fields from a request, writeOnly fields from a response.
+func visible(v any, ref *openapi3.SchemaRef, mode spec.Mode, depth int) any {
+	if ref == nil || ref.Value == nil || depth > 20 || mode == spec.ModePlain {
+		return v
+	}
+	switch x := v.(type) {
+	case map[string]any:
+		props, _ := dict.Properties(ref.Value)
+		out := make(map[string]any, len(x))
+		for k, cv := range x {
+			if c := props[k]; c != nil && c.Value != nil {
+				if (mode == spec.ModeRequest && c.Value.ReadOnly) || (mode == spec.ModeResponse && c.Value.WriteOnly) {
+					continue
+				}
+				cv = visible(cv, c, mode, depth+1)
+			}
+			out[k] = cv
+		}
+		return out
+	case []any:
+		if ref.Value.Items == nil {
+			return v
+		}
+		out := make([]any, len(x))
+		for i, item := range x {
+			out[i] = visible(item, ref.Value.Items, mode, depth+1)
+		}
+		return out
+	}
+	return v
+}
+
 // coerce adapts a default to the schema type: a scalar for an array field
 // becomes a one-element array, an array for a scalar field its first
 // element, numeric strings numbers and numbers strings.
@@ -649,6 +761,10 @@ func coerce(v any, s *openapi3.Schema) any {
 		t = p
 	}
 	switch x := v.(type) {
+	case map[string]any:
+		if t == "array" {
+			return []any{x}
+		}
 	case []any:
 		if t != "array" && len(x) > 0 {
 			return coerce(x[0], s)

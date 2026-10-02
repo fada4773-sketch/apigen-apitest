@@ -951,7 +951,86 @@ A JSON object. Keys are compared without regard to case; two keys that differ on
 
 Priority for fields: `Dto.Name` before `operationId.Name` before `Name`.
 
-**Values** may be any JSON type. They are adjusted to the schema where this loses nothing: a single value for an array field becomes a one-element array, an array for a single field gives its first element, a numeric string becomes a number for numeric fields, and numbers and booleans become strings for string fields. A value that still violates the schema of a place it applies to stops the run with `DEFAULT_INVALID`, and nothing is written. For generic names like `Name` or `Code`, use the `Dto.` or `operationId.` form.
+**Values** may be any JSON type (objects and lists: see below). They are adjusted to the schema where this loses nothing: a single value for an array field becomes a one-element array, an array for a single field gives its first element, a numeric string becomes a number for numeric fields, and numbers and booleans become strings for string fields. A value that still violates the schema of a place it applies to stops the run with `DEFAULT_INVALID`, and nothing is written. For generic names like `Name` or `Code`, use the `Dto.` or `operationId.` form.
+
+#### Objects, lists and whole DTOs
+
+A key does not have to name a single value. Its value can also be an object or a list. Where it lands depends on what the key names:
+
+| Goal | Key | Value |
+|---|---|---|
+| a list of plain values | `"Ship.Tags"` | `["cargo", "fast"]` |
+| a free object (`type: object` without `properties`) | `"Ship.Settings"` | `{"mode": "eco", "lights": {"deck": true}}` |
+| some fields of a DTO inside another DTO | `"Ship.Pilot"` | `{"Name": "Ada"}` |
+| the elements of a list of DTOs | `"Ship.Crew"` | `[{"Name": "Bo"}, {"Name": "Cy", "Rank": 5}]` |
+| the same DTO field everywhere the DTO is used | `"Pilot.Name"` | `"Ada"` |
+| a whole DTO everywhere | one `Dto.Field` key per field | `"Pilot.Name": "Ada"`, `"Pilot.Rank": 3` |
+| a field in the body of one operation only | `"createShip.Pilot"`, `"createShip.Name"` | as above |
+
+The examples below use this spec:
+
+```yaml
+Ship:
+  type: object
+  required: [Name, Pilot]
+  properties:
+    Id:       { type: integer, readOnly: true }
+    Name:     { type: string }
+    Pilot:    { $ref: "#/components/schemas/Pilot" }
+    Crew:     { type: array, items: { $ref: "#/components/schemas/Pilot" } }
+    Tags:     { type: array, items: { type: string } }
+    Settings: { type: object }
+Pilot:
+  type: object
+  required: [Name]
+  properties:
+    Id:   { type: integer, readOnly: true }
+    Name: { type: string, maxLength: 12 }
+    Rank: { type: integer, minimum: 1, maximum: 5 }
+```
+
+**Plain values and free objects** (`Tags`, `Settings`) are used as given. A list replaces the generated list. A single value for a list field becomes a one-element list.
+
+**A field that holds a DTO** (`Pilot`) is **merged**. The generator builds the DTO as usual, then lays the default over it:
+
+```json
+{ "Ship.Pilot": { "Name": "Ada" } }
+```
+
+gives `"Pilot": {"Name": "Ada", "Rank": 3}`. `Name` comes from the default and `Rank` comes from the dictionary. Nested objects are merged the same way, so `{"Pilot": {"Address": {"City": "Kiel"}}}` changes only the city.
+
+**A list of DTOs** (`Crew`) is merged per element. The list in the default sets the length. Each element is laid over a generated element, which supplies the fields you leave out:
+
+```json
+{ "Ship.Crew": [ { "Name": "Bo" }, { "Name": "Cy", "Rank": 5 } ] }
+```
+
+gives two crew members, both with all their fields. A single object instead of a list counts as a one-element list.
+
+**A whole DTO.** There is no single key for a DTO itself. List its fields with the DTO name instead: `"Pilot.Name"` and `"Pilot.Rank"` apply wherever a `Pilot` is built. That covers a request body of type `Pilot`, the `Pilot` field of a `Ship` and every element of `Crew`. Fields you leave out keep their generated values. To fix a value for one operation only, use `"<operationId>.<Field>"`. It applies to the fields of that operation's body at any depth.
+
+**Which DTO a key names.** In `"Ship.Pilot"`, `Ship` is the DTO that **contains** the field and `Pilot` is the field name. `"Pilot.Name"` names the field `Name` inside `Pilot`. When both apply, the object default is laid over last and wins:
+
+```json
+{
+  "Pilot.Name": "Ada",
+  "Ship.Pilot": { "Name": "Captain" }
+}
+```
+
+The pilot of a ship is `Captain`. Every other pilot, for example in `Crew` or a `Pilot` request body, is `Ada`.
+
+**readOnly and writeOnly.** A default may contain every field. Fields the place must not have are left out: `readOnly` fields in request bodies, `writeOnly` fields in responses. With `"Ship.Pilot": {"Name": "Ada", "Id": 9}`, the response example contains `"Id": 9` and the request body does not.
+
+**Existing examples.** Defaults are merged into an example that already exists and is valid. Its other fields and list elements stay unchanged (`DEFAULTS_APPLIED`). A list in the default still sets the length.
+
+**Limits:**
+
+- **Fields cannot be removed.** A default adds or changes fields, but it cannot take out an optional field the generator added. To control every field, list every field.
+- **`null` is a value**, not "remove". It is only valid for `nullable` fields.
+- **The merged result is validated** against the schema of the place, with the pointer to the failing field. For example, `"Ship.Pilot": {"Rank": 9}` stops the run with `DEFAULT_INVALID … /Rank: number must be at most 5`. Nothing is written.
+- **A plain key** like `"Pilot"` also matches every field named `Pilot` in other DTOs. Use the `Dto.` form when the name is used for different things.
+- **Objects and lists are not passed to apitest.** `-check` and `Config.Params` take plain values only (strings, numbers, booleans). Object defaults only shape the examples written into the spec.
 
 **Extensions** are set on the operation and overwrite a value that is already there. apitest's own extensions are type-checked, because apitest ignores wrong types silently:
 

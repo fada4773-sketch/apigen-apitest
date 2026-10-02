@@ -299,3 +299,69 @@ func TestApplyReportsInvalidNamedExamples(t *testing.T) {
 		t.Errorf("named invalid: %v", n)
 	}
 }
+
+// A default for a place that holds a DTO, a list of DTOs or a free object
+// is laid over the generated value; readOnly fields stay out of requests.
+func TestApplyObjectDefaults(t *testing.T) {
+	r := applyToFile(t, "nested.yaml", `{
+	  "Ship.Pilot": {"Name": "Ada", "Id": 9},
+	  "Ship.Crew": [{"Name": "Bo"}, {"Name": "Cy", "Rank": 5}],
+	  "Ship.Tags": ["red", "fast"],
+	  "Ship.Settings": {"mode": "eco", "lights": {"deck": true}}
+	}`, Options{Seed: 1})
+	if len(r.res.Fatal) > 0 {
+		t.Fatalf("fatal: %v", r.res.Fatal)
+	}
+	body := func(keys ...string) map[string]any {
+		v, _ := example(t, r.doc, keys...).(map[string]any)
+		return v
+	}
+	req := body("paths", "/ships", "post", "requestBody", "content", "application/json", "example")
+	pilot, _ := req["Pilot"].(map[string]any)
+	if pilot["Name"] != "Ada" || pilot["Rank"] == nil || pilot["Id"] != nil {
+		t.Errorf("request pilot: %v", pilot)
+	}
+	crew, _ := req["Crew"].([]any)
+	if len(crew) != 2 {
+		t.Fatalf("crew: %v", crew)
+	}
+	second, _ := crew[1].(map[string]any)
+	if second["Name"] != "Cy" || second["Rank"] != json.Number("5") {
+		t.Errorf("crew[1]: %v", second)
+	}
+	if first, _ := crew[0].(map[string]any); first["Rank"] == nil {
+		t.Errorf("crew[0] lost its generated fields: %v", first)
+	}
+	if !reflect.DeepEqual(req["Tags"], []any{"red", "fast"}) {
+		t.Errorf("tags: %v", req["Tags"])
+	}
+	settings, _ := req["Settings"].(map[string]any)
+	if settings["mode"] != "eco" {
+		t.Errorf("settings: %v", settings)
+	}
+	resp := body("paths", "/ships", "post", "responses", "201", "content", "application/json", "example")
+	if p, _ := resp["Pilot"].(map[string]any); p["Id"] != json.Number("9") {
+		t.Errorf("response pilot keeps readOnly Id: %v", p)
+	}
+	// an existing example gets the default merged in, its other fields stay
+	upd := body("paths", "/ships/{id}", "put", "requestBody", "content", "application/json", "example")
+	if p, _ := upd["Pilot"].(map[string]any); p["Name"] != "Ada" || p["Rank"] != json.Number("2") {
+		t.Errorf("existing pilot: %v", p)
+	}
+}
+
+func TestApplyObjectDefaultInvalid(t *testing.T) {
+	r := applyToFile(t, "nested.yaml", `{"Ship.Pilot": {"Rank": 9}}`, Options{Seed: 1})
+	if len(r.res.Fatal) == 0 || !strings.Contains(r.res.Fatal[0], "DEFAULT_INVALID") || !strings.Contains(r.res.Fatal[0], "/Rank") {
+		t.Errorf("fatal: %v", r.res.Fatal)
+	}
+}
+
+func TestOverlay(t *testing.T) {
+	base := map[string]any{"a": 1, "n": map[string]any{"x": 1, "y": 2}, "l": []any{map[string]any{"k": 1, "j": 2}}}
+	top := map[string]any{"n": map[string]any{"y": 3}, "l": []any{map[string]any{"k": 5}, map[string]any{"j": 7}}}
+	want := map[string]any{"a": 1, "n": map[string]any{"x": 1, "y": 3}, "l": []any{map[string]any{"k": 5, "j": 2}, map[string]any{"k": 1, "j": 7}}}
+	if got := overlay(base, top); !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v", got)
+	}
+}
