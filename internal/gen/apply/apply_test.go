@@ -153,9 +153,10 @@ func TestApplyWritesExamples(t *testing.T) {
 	if v, _ := example(t, r.doc, "paths", "/apps/{id}", "get", "parameters", "0", "example").(json.Number); v != "7" {
 		t.Errorf("getApp id = %v, want 7 from appId", v)
 	}
-	// generic {key} without default: generated and kept per path
-	if _, ok := r.dict.Paths["/users/{key}"]; !ok {
-		t.Errorf("no value for /users/{key} in the dictionary: %v", r.dict.Paths)
+	// generic {key} without default, bound to createApp /AppCode: the value
+	// of the producer's example, not a generated one
+	if v := example(t, r.doc, "paths", "/users/{key}", "parameters", "0", "example"); v != "a1" {
+		t.Errorf("deleteUser key = %v, want a1 from the createApp example", v)
 	}
 
 	// a shared parameter cannot take an operation-specific default
@@ -454,5 +455,24 @@ func TestApplyMatchesPathValues(t *testing.T) {
 	}
 	if v := r.dict.Schemas["PlanetRead"].Properties["Id"].Value; v != json.Number("100") {
 		t.Errorf("dictionary PlanetRead.Id: %v", v)
+	}
+}
+
+// A parameter bound to a list GET takes its example from the producer's
+// example, and the response of the operation follows it.
+func TestApplyBoundParameterFollowsProducer(t *testing.T) {
+	r := applyToFile(t, "lists.yaml", `{"getPlanetById.id": {"bind": "listPlanets", "pointer": "/0/Id"}}`, Options{Seed: 1})
+	if len(r.res.Fatal) > 0 {
+		t.Fatalf("fatal: %v", r.res.Fatal)
+	}
+	list, _ := example(t, r.doc, "paths", "/Planet", "get", "responses", "200", "content", "application/json", "example").([]any)
+	first, _ := list[0].(map[string]any)
+	param := example(t, r.doc, "paths", "/Planet/id/{id}", "get", "parameters", "0", "example")
+	if param == nil || param != first["Id"] {
+		t.Errorf("parameter %v, first planet %v", param, first["Id"])
+	}
+	planet, _ := example(t, r.doc, "paths", "/Planet/id/{id}", "get", "responses", "200", "content", "application/json", "example").(map[string]any)
+	if planet["Id"] != first["Id"] {
+		t.Errorf("response %v, first planet %v", planet["Id"], first["Id"])
 	}
 }

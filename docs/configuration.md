@@ -923,6 +923,8 @@ A field gets **no value** (`NO_VALUE`, `PATTERN_PENDING`, `TYPE_CONFLICT`) only 
 
 Every value is validated against its schema before it is used. Compound names share one value across DTOs and parameters (`dockCode` and `DockCode`), generated for the strictest place first, so a parameter with a pattern and a field without one get the same value. Generic names (`Name`, `Id`, `Version`) get a value per DTO.
 
+**Bound parameters follow their producer.** A path parameter with a binding in `defaults.json` gets as example the value its producer's example has at the pointer. With `"GetBookById.id": {"bind": "GetBooks", "pointer": "/0/Id"}` and a `GetBooks` example whose first element has `Id: 550`, the parameter `id` gets `550`, and so does the response of `GetBookById`. A fixed value for the parameter in `defaults.json` (`"appId": 7`, `"/Book/id/{id}": 7`) still wins. At run time apitest takes the real value from `GetBooks`; the examples only tell the same story.
+
 **Response examples follow the path.** The example of a 2xx response agrees with the path parameters of its operation, in new and in existing examples:
 
 | Operation | Path example | Response example |

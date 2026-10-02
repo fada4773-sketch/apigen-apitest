@@ -75,6 +75,9 @@ contain breaking changes, which are listed here.
   `$rejected` are not proposed again.
 - `defaults.json`: `null` marks a value still to be filled in
   (`DEFAULT_TODO`); `apply` creates an empty defaults file if it is missing.
+- A parameter bound in `defaults.json` takes its example from the
+  producer's example at the pointer (`GetBooks` `/0/Id` = 550 → `id: 550`),
+  so parameter, list and response examples agree.
 - Response examples follow the path: `GET /Book/id/{id}` with id 100
   returns `Id: 100`, the Articles under `/Book/id/{id}/Article` get
   `BookId: 100`; a path value from the defaults is also kept in the DTO

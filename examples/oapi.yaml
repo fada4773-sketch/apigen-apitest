@@ -1,0 +1,260 @@
+openapi: 3.0.1
+info:
+  title: Core
+  version: '0.1'
+  description: >-
+    Backend API
+tags:
+  - name: Book
+    description: Endpoints to handle Books.
+    x-displayName: Book
+paths:
+  /Book:
+    get:
+      operationId: GetBooks
+      tags:
+        - Book
+      description: Get all Books
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BookRead'
+              example:
+                - BookCode: ajlh
+                  Id: 550
+                  Name: Brazilian Book
+          links:
+            GetBookById_id:
+              operationId: GetBookById
+              parameters:
+                id: $response.body#/0/Id
+            UpdateBookById_id:
+              operationId: UpdateBookById
+              parameters:
+                id: $response.body#/0/Id
+            GetBook_BookCode:
+              operationId: GetBook
+              parameters:
+                BookCode: $response.body#/0/BookCode
+            UpdateBook_BookCode:
+              operationId: UpdateBook
+              parameters:
+                BookCode: $response.body#/0/BookCode
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /Book/id/{id}:
+    parameters:
+      - $ref: '#/components/parameters/id'
+    get:
+      operationId: GetBookById
+      tags:
+        - Book
+      description: Get Book by Id
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookRead'
+              example:
+                BookCode: ajlh
+                Id: 279
+                Name: Brazilian Book
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      operationId: UpdateBookById
+      tags:
+        - Book
+      description: Update the Book by Id
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Response'
+              example:
+                Id: 862
+                Message: For another, document the eye and grip the rest.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BookUpdate'
+            example:
+              BookCode: ajlh
+              Name: So Few Book
+  /Book/{BookCode}:
+    parameters:
+      - $ref: '#/components/parameters/BookCode'
+    get:
+      operationId: GetBook
+      tags:
+        - Book
+      description: Get Book by BookCode
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookRead'
+              example:
+                BookCode: ajlh
+                Id: 550
+                Name: Brazilian Book
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      operationId: UpdateBook
+      tags:
+        - Book
+      description: Update the Book by BookCode
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Response'
+              example:
+                Id: 862
+                Message: For another, document the eye and grip the rest.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BookUpdate'
+            example:
+              BookCode: ajlh
+              Name: So Few Book
+components:
+  schemas:
+    BookUpdate:
+      type: object
+      required:
+        - Name
+        - BookCode
+      properties:
+        Name:
+          type: string
+        BookCode:
+          type: string
+    BookRead:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/BookUpdate'
+        - properties:
+            Id:
+              type: integer
+              format: uint
+              minimum: 1
+    Response:
+      type: object
+      properties:
+        Id:
+          type: integer
+          format: uint
+          minimum: 1
+        Message:
+          type: string
+      required:
+        - Id
+        - Message
+    Error:
+      type: object
+      properties:
+        Code:
+          type: string
+        Message:
+          type: string
+      required:
+        - Code
+        - Message
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: The specified resource was not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InternalError:
+      description: >-
+        The request caused an internal exception. Please provide the details to the solution owner!
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  parameters:
+    id:
+      name: id
+      description: The id of an entity
+      required: true
+      in: path
+      schema:
+        type: integer
+        format: uint
+        minimum: 1
+      example: 279
+    BookCode:
+      name: BookCode
+      description: The code of the Book
+      required: true
+      in: path
+      schema:
+        type: string
+        pattern: ^[a-z]+$
+      example: ajlh

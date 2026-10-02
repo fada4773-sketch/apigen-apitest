@@ -343,6 +343,8 @@ func (a *applier) parameter(op *spec.Operation, p *openapi3.Parameter, target *y
 			if v != nil {
 				a.remember(a.d.Parameters[p.In+"."+p.Name], e, v, "parameters."+p.In+"."+p.Name)
 			}
+		} else {
+			v = a.fromProducer(op, p)
 		}
 	}
 	if v == nil && existing != nil && !a.opt.Overwrite && a.valid(s, existing, spec.ModePlain) {
@@ -389,6 +391,9 @@ func (a *applier) genericID(op *spec.Operation, p *openapi3.Parameter, scopeOp, 
 			a.genericDef = true
 			return a.useDefault(e, s, spec.ModePlain, where)
 		}
+	}
+	if v := a.fromProducer(op, p); v != nil {
+		return v
 	}
 	if v, ok := a.d.Paths[op.Path]; ok && a.valid(s, v, spec.ModePlain) {
 		return v
