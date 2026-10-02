@@ -882,7 +882,7 @@ Exit codes: `0` success, `1` a problem (fatal defaults, `check` findings, a file
 | `-token-env <name>` | – | apply, discover | Environment variable with a bearer token for `-base-url`. The token is never printed. |
 | `-header "Name: value"` | – | apply, discover | Extra header for `-base-url`; repeatable. |
 | `-dry-run` | off | apply, dict | Show what would change; write neither spec nor dictionary. |
-| `-v` | off | apply, dict | Verbose: list every change (`VALUE_NEW`, `EXAMPLE_ADDED`, `DEFAULTS_APPLIED`, …) and how often each default was used, not only problems. |
+| `-v` | off | apply, dict | Verbose: list every change (`VALUE_NEW`, `EXAMPLE_ADDED`, `DEFAULTS_APPLIED`, …) and at how many places each default matched (also places that already have the value, so the count repeats on every run), not only problems. |
 
 ### 13.3 Where examples are written
 
@@ -1103,6 +1103,7 @@ The pilot of a ship is `Captain`. Every other pilot, for example in `Crew` or a 
 - **`value`** is write-protected. Edit it by hand and the next run keeps it as long as it fits. A value that no longer fits is reported as `VALUE_INVALID` and kept, unless you run with `-repair`.
 - **`ref`** marks a field that holds another DTO, also when the spec writes it as `allOf: [{$ref: X}, {…extensions only}]`, and a DTO that is only an alias of another (`Vessel: {$ref: ShipWrite}`). The value is built from that DTO. A DTO that extends another with `allOf` and own fields gets its own `properties`.
 - **`paths`** keeps the values of generic path ids per path.
+- **Values from `defaults.json` are kept here** once they are applied (`DICT_FROM_DEFAULTS`, counted in the spec summary line as `dictionary values from defaults`). A field key like `"Pilot.Name"` or a plain key sets the `value` of each field it matched. `"#/components/schemas/Person"` sets the `value` of a free DTO, or passes its fields to the DTO's own fields (not into other DTOs it refers to). A parameter default sets the parameter's `value`. Keys of the form `"<operationId>.<name>"` are not kept: a dictionary node is shared by every operation. A second run with the same defaults reports nothing. Remove a default later and the dictionary keeps its last value, so the examples stay as they are; change the value in the dictionary or set a new default to change them.
 - Fields and parameters that disappear from the spec are dropped and reported as `REMOVED`.
 
 ### 13.8 Messages
@@ -1131,7 +1132,8 @@ Problems are always listed; messages marked *info* only with `-v`.
 | `EXT_FROM_DEFAULTS` *info* | apply | an extension was set | – |
 | `BIND_WRITTEN` *info* | apply | a binding was written | – |
 | `BIND_NOT_WRITTEN` | apply | no place for the binding (shared response, no 2xx) | define the parameter in the operation |
-| `DEFAULT_UNUSED` | apply | a defaults key matched nothing | check the spelling and the operationId |
+| `DEFAULT_UNUSED` | apply | a defaults key matched nothing; a key that names a DTO gets the hint `#/components/schemas/<Dto>` | check the spelling and the operationId |
+| `DICT_FROM_DEFAULTS` | dict | an applied default was kept in the dictionary | – |
 | `SOURCE_UNRESOLVED` | apply | sources without `-base-url` | `-base-url` or a `discover` file |
 | `SOURCE_RESOLVED` | apply | a source was fetched | – |
 | `FATAL DEFAULT_INVALID` | apply | a default violates a schema; nothing written | fix or narrow the key |

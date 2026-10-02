@@ -42,6 +42,7 @@ const (
 	CodeBindSkipped   = "BIND_NOT_WRITTEN"      // a binding could not be written
 	CodeDefaultUnused = "DEFAULT_UNUSED"        // a defaults entry matched nothing
 	CodeNamedInvalid  = "EXAMPLE_NAMED_INVALID" // a curated named example violates its schema
+	CodeDictDefault   = "DICT_FROM_DEFAULTS"    // a default was kept in the dictionary
 )
 
 // Options control Apply.
@@ -65,6 +66,7 @@ type Note struct {
 type Stats struct {
 	Added, Replaced, DefaultsApplied, Kept, Incomplete int
 	Extensions, Bindings                               int
+	Dict                                               int // dictionary values taken from the defaults
 }
 
 // Result of Apply. With Fatal entries the document must not be saved.
@@ -266,6 +268,9 @@ func (a *applier) parameter(op *spec.Operation, p *openapi3.Parameter, target *y
 	default:
 		if e := a.defs.Field("", scopeOp, p.Name); e != nil {
 			v = a.useDefault(e, s, spec.ModePlain, where)
+			if v != nil {
+				a.remember(a.d.Parameters[p.In+"."+p.Name], e, v, "parameters."+p.In+"."+p.Name)
+			}
 		}
 	}
 	if v == nil && existing != nil && !a.opt.Overwrite && a.valid(s, existing, spec.ModePlain) {
@@ -530,7 +535,66 @@ func (a *applier) dtoDefault(ref *openapi3.SchemaRef) (*defaults.Entry, string) 
 	if target == "" {
 		return nil, ""
 	}
-	return a.defs.Plain(DTOKey(target)), "components.schemas." + target
+	e := a.defs.Plain(DTOKey(target))
+	if e != nil {
+		a.remember(a.d.Schemas[target], e, coerce(e.Value, ref.Value), "schemas."+target)
+	}
+	return e, "components.schemas." + target
+}
+
+// dictField returns the dictionary node of a field of a DTO.
+func (a *applier) dictField(dto, name string) *dict.Node {
+	n := a.d.Schemas[dto]
+	for i := 0; n != nil && n.Ref != "" && i < 30; i++ { // alias
+		n = a.d.Schemas[n.Ref]
+	}
+	if n == nil {
+		return nil
+	}
+	return n.Properties[name]
+}
+
+// remember keeps a default in the dictionary, so the dictionary shows the
+// values the spec uses. A leaf takes the value; a DTO passes the fields of
+// an object default on to its own leaves, but not into other DTOs, which
+// the default does not set everywhere. Operation-scoped defaults are not
+// kept: a node is shared by every operation.
+func (a *applier) remember(n *dict.Node, e *defaults.Entry, v any, where string) {
+	if n == nil || a.operationScoped(e) {
+		return
+	}
+	a.keep(n, v, where, 0)
+}
+
+func (a *applier) keep(n *dict.Node, v any, where string, depth int) {
+	if n == nil || depth > 20 || n.Ref != "" {
+		return
+	}
+	if n.Leaf() {
+		if v == nil || reflect.DeepEqual(spec.Normalize(n.Value), spec.Normalize(v)) {
+			return
+		}
+		n.Value = v
+		a.res.Stats.Dict++
+		a.note(CodeDictDefault, where, compact(v))
+		return
+	}
+	switch x := v.(type) {
+	case map[string]any:
+		for _, k := range sortedKeys(x) {
+			a.keep(n.Properties[k], x[k], where+"."+k, depth+1)
+		}
+	case []any:
+		if len(x) > 0 {
+			a.keep(n.Items, x[0], where+"[]", depth+1)
+		}
+	}
+}
+
+// operationScoped reports whether a key is "<operationId>.<name>".
+func (a *applier) operationScoped(e *defaults.Entry) bool {
+	prefix, _, found := strings.Cut(e.Key, ".")
+	return found && a.s.Op(prefix) != nil && a.d.Schemas[prefix] == nil
 }
 
 // DTOKey is the defaults.json key for a whole DTO.
@@ -608,6 +672,7 @@ func (a *applier) leaf(s *openapi3.Schema, dto string, dn *dict.Node, name, op s
 	if name != "" {
 		if e := a.defs.Field(dto, op, name); e != nil {
 			if v := a.useDefault(e, s, spec.ModePlain, where); v != nil {
+				a.remember(dn, e, v, "schemas."+where)
 				return v, true, ""
 			}
 			return nil, false, where
@@ -657,7 +722,11 @@ func (a *applier) fieldDefaults(v any, ref *openapi3.SchemaRef, dto string, stac
 			}
 			if isLeaf(c) {
 				if e := a.defs.Field(dto, op, k); e != nil {
-					if nv := a.useDefault(e, c.Value, spec.ModePlain, dtoWhere(dto, k)); nv != nil && !reflect.DeepEqual(spec.Normalize(nv), spec.Normalize(cv)) {
+					nv := a.useDefault(e, c.Value, spec.ModePlain, dtoWhere(dto, k))
+					if nv != nil && dto != "" {
+						a.remember(a.dictField(dto, k), e, nv, "schemas."+dtoWhere(dto, k))
+					}
+					if nv != nil && !reflect.DeepEqual(spec.Normalize(nv), spec.Normalize(cv)) {
 						out[k], changed = nv, true
 					}
 				}

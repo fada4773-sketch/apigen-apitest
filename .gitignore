@@ -29,3 +29,6 @@ apitest-report/
 !/docs/workflow.md
 /big-api/
 /example-gen/*
+
+# personal instructions for Claude Code
+/CLAUDE.local.md

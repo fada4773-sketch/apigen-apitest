@@ -156,7 +156,7 @@ apitest-gen -spec ../api/openapi.yaml -dict global-dict.json -check
 
 ```text
 dictionary global-dict.json created: 5 DTOs, 13 fields, 2 parameters; values: 14 new, 1 reused, 0 kept, 0 invalid, 0 repaired, 0 without value
-spec ../api/openapi.yaml: 9 examples added, 0 replaced, 0 with defaults, 0 kept, 0 incomplete; 0 extensions, 0 bindings
+spec ../api/openapi.yaml: 9 examples added, 0 replaced, 0 with defaults, 0 kept, 0 incomplete; 0 extensions, 0 bindings; 0 dictionary values from defaults
 check: 23 of 23 cases can be sent, 0 problems
 ```
 
@@ -224,14 +224,14 @@ Generated values are fine for everything the test creates itself. They are not f
 apitest-gen -spec ../api/openapi.yaml -dict global-dict.json -defaults defaults.json -check -v
 ```
 
-`-v` (verbose) also lists every change and, at the end, how often each default was used. Without it apitest-gen prints only the summary lines and the problems.
+`-v` (verbose) also lists every change and, at the end, at how many places each default matched. The count is the same on every run, also when nothing changes: it counts the places, not the writes. Whether something was written is shown by the summary line (`4 with defaults`) and the `DEFAULTS_APPLIED` lines. Without it apitest-gen prints only the summary lines and the problems.
 
 ```text
-spec ../api/openapi.yaml: 0 examples added, 0 replaced, 4 with defaults, 5 kept, 0 incomplete; 2 extensions, 1 bindings
+spec ../api/openapi.yaml: 0 examples added, 0 replaced, 4 with defaults, 5 kept, 0 incomplete; 2 extensions, 1 bindings; 0 dictionary values from defaults
   DEFAULTS_APPLIED      paths./ships.post.requestBody.content[application/json]: {"CargoTons":212.4,"Callsign":"TQ7KR2","Class":"shuttle",…}
   EXT_FROM_DEFAULTS     paths./ships/{id}.delete: x-apitest-verify: {"poll":true,"timeout":"20s"}
   BIND_WRITTEN          paths./docks/{dockCode}/bookings.post.parameters[dockCode]: x-apitest-bind: {"from":"listDocks","pointer":"/0/DockCode"}
-defaults used:
+defaults matched (places in the spec this run, also where the value is already there):
   PilotEmail: 3
   Class: 3
   ShipWrite.Name: 1

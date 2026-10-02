@@ -398,3 +398,31 @@ func TestApplyDTODefault(t *testing.T) {
 		t.Errorf("unused: %v", n)
 	}
 }
+
+// Applied defaults are kept in the dictionary, except operation-scoped ones.
+func TestApplyKeepsDefaultsInDictionary(t *testing.T) {
+	r := applyToFile(t, "nested.yaml", `{
+	  "#/components/schemas/Person": {"name": "my"},
+	  "#/components/schemas/Pilot": {"Rank": 1},
+	  "Ship.Tags": ["red"],
+	  "updateShip.Name": "only here"
+	}`, Options{Seed: 1})
+	if len(r.res.Fatal) > 0 {
+		t.Fatalf("fatal: %v", r.res.Fatal)
+	}
+	if v := r.dict.Schemas["Person"].Value; !reflect.DeepEqual(v, map[string]any{"name": "my"}) {
+		t.Errorf("Person: %v", v)
+	}
+	if v := r.dict.Schemas["Pilot"].Properties["Rank"].Value; v != json.Number("1") {
+		t.Errorf("Pilot.Rank: %v", v)
+	}
+	if v := r.dict.Schemas["Ship"].Properties["Tags"].Value; !reflect.DeepEqual(v, []any{"red"}) {
+		t.Errorf("Ship.Tags: %v", v)
+	}
+	if v := r.dict.Schemas["Ship"].Properties["Name"].Value; v == "only here" {
+		t.Error("an operation-scoped default was kept in the dictionary")
+	}
+	if r.res.Stats.Dict != 3 {
+		t.Errorf("stats: %d, notes %v", r.res.Stats.Dict, notes(r, CodeDictDefault))
+	}
+}

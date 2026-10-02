@@ -190,15 +190,15 @@ func execute(o *options, out io.Writer) error {
 	if o.out != "" {
 		target = o.out
 	}
-	fmt.Fprintf(out, "spec %s: %d examples added, %d replaced, %d with defaults, %d kept, %d incomplete; %d extensions, %d bindings\n",
-		target, res.Stats.Added, res.Stats.Replaced, res.Stats.DefaultsApplied, res.Stats.Kept, res.Stats.Incomplete, res.Stats.Extensions, res.Stats.Bindings)
+	fmt.Fprintf(out, "spec %s: %d examples added, %d replaced, %d with defaults, %d kept, %d incomplete; %d extensions, %d bindings; %d dictionary values from defaults\n",
+		target, res.Stats.Added, res.Stats.Replaced, res.Stats.DefaultsApplied, res.Stats.Kept, res.Stats.Incomplete, res.Stats.Extensions, res.Stats.Bindings, res.Stats.Dict)
 	for _, n := range res.Notes {
 		if o.verbose || !quiet[n.Code] {
 			fmt.Fprintf(out, "  %-21s %s: %s\n", n.Code, n.Where, n.Message)
 		}
 	}
 	if defs.Len() > 0 && o.verbose {
-		fmt.Fprintln(out, "defaults used:")
+		fmt.Fprintln(out, "defaults matched (places in the spec this run, also where the value is already there):")
 		for _, u := range defs.Usage() {
 			fmt.Fprintf(out, "  %s: %d\n", u.Key, u.Uses)
 		}

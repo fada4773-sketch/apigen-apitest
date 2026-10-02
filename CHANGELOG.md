@@ -63,6 +63,9 @@ contain breaking changes, which are listed here.
   also a free one: its schema example and every body, field and list
   element of that type. A key that names a DTO instead of a field is
   reported with this key as a hint.
+- Applied defaults are kept in `global-dict.json` (`DICT_FROM_DEFAULTS`),
+  except operation-scoped ones, so the dictionary shows the values the spec
+  uses and a second run reports nothing.
 - Free objects (`type: object` without `properties`) get `{}`, or entries
   from a typed `additionalProperties`, `minProperties` and `required`,
   instead of `NO_VALUE`.
