@@ -154,6 +154,7 @@ func (a *applier) bindParam(op *spec.Operation, p *openapi3.Parameter, paramY *y
 			return
 		}
 		linksY = yamldoc.Get(respY, "links")
+		linksY.Style = 0 // block style: one link per line, not one long flow mapping
 	}
 	link := map[string]any{"operationId": op.ID, "parameters": map[string]any{p.Name: expr}}
 	a.setIfChanged(linksY, op.ID+"_"+p.Name, link, where, CodeBind)

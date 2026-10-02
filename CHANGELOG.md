@@ -71,6 +71,13 @@ contain breaking changes, which are listed here.
   user knows (`CHOOSE`), corrections of the defaults (`EDIT`), and what
   `apply` or a spec change solves. The proposals go to
   `defaults.suggested.json` for review; nothing is applied.
+- `review` lists a missing body example once per operation, not once per
+  case.
+- New `links` are written in block style, one link per line, instead of
+  one long flow mapping.
+- `examples/path-conflict`: what happens with `/book/{id}` next to
+  `/book/{class}`, tested with `check`, `review`, `apply` and apitest,
+  before and after the fix.
 - Inline schemas outside any DTO (e.g. a response `{type: object,
   properties: …}`) get generated values instead of `EXAMPLE_INCOMPLETE`.
 - Applied defaults are kept in `global-dict.json` (`DICT_FROM_DEFAULTS`),

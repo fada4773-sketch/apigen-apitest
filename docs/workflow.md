@@ -329,7 +329,7 @@ apitest-gen review -spec ../api/openapi.yaml -dict global-dict.json -defaults de
 ```
 
 ```text
-review: 3 findings; 3 defaults proposed, 0 values to choose, 0 defaults to correct, 0 fixed by apply, 0 to fix in the spec
+review: 3 suggestions; 3 defaults proposed, 0 values to choose, 0 defaults to correct, 0 fixed by apply, 0 to fix in the spec
   DEFAULT  getShip.id = {"bind":"registerShip","pointer":"/Id"}  (heuristic at paths./ships/{id}.get.parameters[id])
            → Makes the guess explicit; apply writes it as x-apitest-bind (or a link for a shared parameter). Check that registerShip really returns the body /Id that getShip needs
   DEFAULT  updateShip.id = {"bind":"registerShip","pointer":"/Id"}  (heuristic at paths./ships/{id}.put.parameters[id])
@@ -345,7 +345,7 @@ apitest-gen review -spec ../api/openapi.yaml -dict global-dict.json -defaults de
 ```
 
 ```text
-review: 0 findings; 0 defaults proposed, 0 values to choose, 0 defaults to correct, 0 fixed by apply, 0 to fix in the spec
+review: 0 suggestions; 0 defaults proposed, 0 values to choose, 0 defaults to correct, 0 fixed by apply, 0 to fix in the spec
 nothing to review
 ```
 

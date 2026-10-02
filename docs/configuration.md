@@ -939,7 +939,7 @@ When apitest can take the id from a POST at run time (a binding), that value win
 
 ### 13.6 defaults.json
 
-A JSON object. Keys are compared without regard to case; two keys that differ only in case are an error. Keys starting with `$` are comments.
+A JSON object. Keys are compared without regard to case; two keys that differ only in case are an error. So in one operation a body field and a parameter of the same name (`Class` and `class`) share the key `"<operationId>.class"`; use `"Dto.Class"` for the field. Keys starting with `$` are comments.
 
 | Key | Example | Applies to |
 |---|---|---|
@@ -1161,7 +1161,7 @@ apitest-gen review -spec openapi.yaml -dict global-dict.json -defaults defaults.
 ```
 
 ```text
-review: 7 findings; 2 defaults proposed, 2 values to choose, 1 defaults to correct, 1 fixed by apply, 1 to fix in the spec
+review: 7 suggestions; 2 defaults proposed, 2 values to choose, 1 defaults to correct, 1 fixed by apply, 1 to fix in the spec
   DEFAULT  getManifest.id = {"bind":"createShip","pointer":"/Id"}  (heuristic at paths./ships/{id}/manifest.get.parameters[id])
            → Makes the guess explicit; apply writes it as x-apitest-bind …
   DEFAULT  getShip.x-apitest-forbidden = false  (auth at paths./ships/{id}.get.x-apitest-forbidden)

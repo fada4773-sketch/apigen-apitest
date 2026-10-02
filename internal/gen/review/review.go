@@ -268,11 +268,13 @@ func (r *reviewer) notBuildable(set *bind.Set) {
 		if missing {
 			continue
 		}
-		action, fix := ActionSpec, "fix the spec: "+nb.Reason
+		action, fix, where := ActionSpec, "fix the spec: "+nb.Reason, c.Name
 		if strings.HasPrefix(nb.Reason, "required body without example") {
-			action, fix = ActionApply, "run apitest-gen apply: it writes the body example; a field without value is listed as NO_VALUE or PATTERN_PENDING"
+			// one entry per operation, not per case
+			action, where = ActionApply, c.Op.Where+".requestBody"
+			fix = "run apitest-gen apply: it writes the body example; a field without value is listed as NO_VALUE or PATTERN_PENDING"
 		}
-		r.add(Suggestion{Action: action, Finding: "NOT_BUILDABLE", Where: c.Name, Message: nb.Reason, Fix: fix})
+		r.add(Suggestion{Action: action, Finding: "NOT_BUILDABLE", Where: where, Message: nb.Reason, Fix: fix})
 	}
 }
 

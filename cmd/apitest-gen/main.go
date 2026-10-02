@@ -295,7 +295,7 @@ func reviewCommand(o *options, out io.Writer) error {
 	// apply in memory only: its problems are reviewed, nothing is saved
 	applied := apply.Apply(doc, s, d, defs, apply.Options{Seed: o.seed, GenericIDs: ids})
 	res := review.Run(review.Input{Spec: s, Dict: d, DictNotes: notes, Defaults: defs, GenericIDs: ids, Apply: applied})
-	fmt.Fprintf(out, "review: %d findings; %d defaults proposed, %d values to choose, %d defaults to correct, %d fixed by apply, %d to fix in the spec\n",
+	fmt.Fprintf(out, "review: %d suggestions; %d defaults proposed, %d values to choose, %d defaults to correct, %d fixed by apply, %d to fix in the spec\n",
 		len(res.Suggestions), res.Count(review.ActionDefault), res.Count(review.ActionChoose), res.Count(review.ActionEdit), res.Count(review.ActionApply), res.Count(review.ActionSpec))
 	for _, sg := range res.Suggestions {
 		line := sg.Where + ": " + sg.Message
@@ -306,7 +306,7 @@ func reviewCommand(o *options, out io.Writer) error {
 		}
 		fmt.Fprintf(out, "  %-8s %s\n", sg.Action, line)
 		if o.verbose && sg.Fix != "" {
-			fmt.Fprintf(out, "           → %s\n", strings.ReplaceAll(sg.Fix, "\n", "\n             "))
+			fmt.Fprintf(out, "           → %s\n", strings.ToUpper(sg.Fix[:1])+strings.ReplaceAll(sg.Fix[1:], "\n", "\n             "))
 		}
 	}
 	if len(res.Suggestions) == 0 {
