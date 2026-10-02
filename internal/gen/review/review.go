@@ -1,8 +1,8 @@
 // Package review evaluates what apitest would report about a spec, the
 // spec findings, cases it could not send and values the generator could
 // not create, and proposes a fix for each: a defaults.json entry where one
-// can solve it, otherwise what to do. Nothing is applied; the proposals
-// are written to a file for the user to review.
+// can solve it, otherwise what to do. The proposals are added to
+// defaults.json for the user to review; "apply" takes them into the spec.
 package review
 
 import (
@@ -77,7 +77,8 @@ type Input struct {
 type reviewer struct {
 	in    Input
 	res   *Result
-	known map[string]bool // lower-case keys of the defaults
+	known map[string]bool // lower-case keys of the defaults with a value
+	todo  map[string]bool // lower-case keys of the defaults with null
 	seen  map[string]bool
 	// chosen are parameters ("query.zone") that already have a CHOOSE
 	// entry from a case that cannot be sent
@@ -86,9 +87,16 @@ type reviewer struct {
 
 // Run reviews a spec.
 func Run(in Input) *Result {
-	r := &reviewer{in: in, res: &Result{}, known: map[string]bool{}, seen: map[string]bool{}, chosen: map[string]bool{}}
+	r := &reviewer{in: in, res: &Result{}, known: map[string]bool{}, todo: map[string]bool{}, seen: map[string]bool{}, chosen: map[string]bool{}}
 	for _, k := range in.Defaults.Keys() {
+		if in.Defaults.IsTodo(k) {
+			r.todo[strings.ToLower(k)] = true
+			continue
+		}
 		r.known[strings.ToLower(k)] = true
+	}
+	for _, k := range in.Defaults.Rejected {
+		r.known[strings.ToLower(k)] = true // decided: not proposed again
 	}
 	r.specFindings()
 	set, err := bind.Resolve(in.Spec)
@@ -109,10 +117,12 @@ func Run(in Input) *Result {
 	return r.res
 }
 
-// add records a suggestion once; entries for keys that are already in the
-// defaults are dropped, the user has decided them.
+// add records a suggestion once. Keys the defaults already have, or that
+// were rejected, are decided and dropped; a key with null is still open
+// and only listed as a value to choose.
 func (r *reviewer) add(s Suggestion) {
-	if s.Key != "" && r.known[strings.ToLower(s.Key)] {
+	k := strings.ToLower(s.Key)
+	if s.Key != "" && (r.known[k] || (r.todo[k] && s.Action != ActionChoose)) {
 		return
 	}
 	id := s.Action + "|" + s.Key + "|" + s.Where + "|" + s.Message
@@ -183,7 +193,7 @@ func (r *reviewer) bindings(set *bind.Set) {
 			}
 			r.add(Suggestion{Action: ActionDefault, Finding: spec.FindingHeuristic, Where: where, Message: msg,
 				Key: op.ID + "." + p.Name, Value: v,
-				Fix: fmt.Sprintf("makes the guess explicit; apply writes it as x-apitest-bind (or a link for a shared parameter). Check that %s really returns the %s that %s needs", b.Producer.ID, b.Source, op.ID)})
+				Fix: fmt.Sprintf("guessed by apitest from the names: %s returns %s. Keep it if that is the %s %s needs", b.Producer.ID, b.Source, p.Name, op.ID)})
 		}
 	}
 	for _, f := range set.Findings {
@@ -503,46 +513,50 @@ func marshal(v any, prefix string) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// File renders the suggestions as a defaults file for review. Proposed
-// entries are active keys, each after a "$why …" comment; values only the
-// user knows and fixes outside the defaults are "$" comments, which the
-// defaults loader ignores, so nothing takes effect unseen.
-func (r *Result) File() []byte {
-	var b bytes.Buffer
-	b.WriteString("{\n")
-	first := true
-	entry := func(key string, v any) {
-		if !first {
-			b.WriteString(",\n")
-		}
-		first = false
-		fmt.Fprintf(&b, "  %s: %s", marshal(key, ""), marshal(v, "  "))
+// Review is the "$review" block written into defaults.json. It is
+// replaced on every run.
+type Review struct {
+	About   string            `json:"about"`
+	Added   map[string]string `json:"added,omitempty"`
+	FillIn  map[string]string `json:"fill in,omitempty"`
+	Correct []string          `json:"correct,omitempty"`
+	Apply   []string          `json:"apply fixes,omitempty"`
+	Spec    []string          `json:"change the spec,omitempty"`
+}
+
+const about = "Written by apitest-gen review, replaced on every run. " +
+	"\"added\": new entries below; check each one, keep it or change its value; if it is wrong, delete it and add its key to \"$rejected\": [\"…\"]. " +
+	"\"fill in\": replace null with a value that exists in the test environment. " +
+	"\"apply fixes\": nothing to do, the next apitest-gen run fixes it. " +
+	"\"correct\" and \"change the spec\": do it by hand. Then run apitest-gen."
+
+// Changes returns what review adds to defaults.json: the proposed entries
+// (null for a value only the user knows) and the "$review" block, nil if
+// nothing is open.
+func (r *Result) Changes() ([]defaults.Pair, *Review) {
+	var add []defaults.Pair
+	rv := &Review{About: about, Added: map[string]string{}, FillIn: map[string]string{}}
+	line := func(s Suggestion) string {
+		return fmt.Sprintf("%s: %s. %s", s.Where, s.Message, sentence(s.Fix))
 	}
-	entry("$review", "Proposals by apitest-gen review. Check every entry. Accept: copy it into defaults.json, "+
-		"or pass this file after it (-defaults defaults.json,defaults.suggested.json). "+
-		"\"$choose …\" entries need a value from you; \"$edit\" lists entries of your defaults to correct; \"$apply\" and \"$spec\" list what the defaults cannot fix.")
 	for _, s := range r.Suggestions {
-		if s.Action == ActionDefault {
-			entry("$why "+s.Key, fmt.Sprintf("%s at %s: %s. %s", s.Finding, s.Where, s.Message, sentence(s.Fix)))
-			entry(s.Key, s.Value)
+		switch s.Action {
+		case ActionDefault:
+			add = append(add, defaults.Pair{Key: s.Key, Value: s.Value})
+			rv.Added[s.Key] = sentence(s.Fix)
+		case ActionChoose:
+			add = append(add, defaults.Pair{Key: s.Key})
+			rv.FillIn[s.Key] = fmt.Sprintf("%s. %s", s.Message, sentence(s.Fix))
+		case ActionEdit:
+			rv.Correct = append(rv.Correct, line(s))
+		case ActionApply:
+			rv.Apply = append(rv.Apply, s.Where+": "+s.Message) // the next apply fixes it
+		case ActionSpec:
+			rv.Spec = append(rv.Spec, line(s))
 		}
 	}
-	for _, s := range r.Suggestions {
-		if s.Action == ActionChoose {
-			entry("$choose "+s.Key, fmt.Sprintf("%s at %s: %s. %s; then add it as %q", s.Finding, s.Where, s.Message, sentence(s.Fix), s.Key))
-		}
+	if len(r.Suggestions) == 0 {
+		return nil, nil
 	}
-	for _, action := range []string{ActionEdit, ActionApply, ActionSpec} {
-		var list []string
-		for _, s := range r.Suggestions {
-			if s.Action == action {
-				list = append(list, fmt.Sprintf("%s at %s: %s. %s", s.Finding, s.Where, s.Message, sentence(s.Fix)))
-			}
-		}
-		if len(list) > 0 {
-			entry("$"+strings.ToLower(action), list)
-		}
-	}
-	b.WriteString("\n}\n")
-	return b.Bytes()
+	return add, rv
 }

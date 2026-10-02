@@ -68,9 +68,13 @@ contain breaking changes, which are listed here.
   examples and links, cases that cannot be sent, values the generator
   cannot create, wrong or unused defaults) and proposes a fix for each:
   defaults entries with their value (`DEFAULT`), keys whose value only the
-  user knows (`CHOOSE`), corrections of the defaults (`EDIT`), and what
-  `apply` or a spec change solves. The proposals go to
-  `defaults.suggested.json` for review; nothing is applied.
+  user knows (`CHOOSE`, written as `null`), corrections of the defaults
+  (`EDIT`), and what `apply` or a spec change solves. The proposals are
+  added to `defaults.json` (created if missing) with a `$review` block that
+  explains them; the next `apitest-gen` run takes them into dictionary and
+  spec. Keys in `$rejected` are not proposed again.
+- `defaults.json`: `null` marks a value still to be filled in
+  (`DEFAULT_TODO`); `apply` creates an empty defaults file if it is missing.
 - `review` lists a missing body example once per operation, not once per
   case.
 - New `links` are written in block style, one link per line, instead of

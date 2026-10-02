@@ -43,6 +43,7 @@ const (
 	CodeDefaultUnused = "DEFAULT_UNUSED"        // a defaults entry matched nothing
 	CodeNamedInvalid  = "EXAMPLE_NAMED_INVALID" // a curated named example violates its schema
 	CodeDictDefault   = "DICT_FROM_DEFAULTS"    // a default was kept in the dictionary
+	CodeDefaultTodo   = "DEFAULT_TODO"          // a defaults entry is null: its value is still missing
 )
 
 // Options control Apply.
@@ -90,6 +91,9 @@ func Apply(doc *yamldoc.Doc, s *spec.Spec, d *dict.Dict, defs *defaults.Defaults
 		a.operation(op)
 	}
 	a.schemaExamples()
+	for _, key := range defs.Todos() {
+		a.note(CodeDefaultTodo, "defaults", fmt.Sprintf("%q is null; set a value that exists in the test environment", key))
+	}
 	for _, key := range defs.Unused() {
 		msg := fmt.Sprintf("%q matched no field, parameter or operation; check the spelling", key)
 		if dto := a.dtoName(key); dto != "" {

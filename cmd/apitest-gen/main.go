@@ -37,7 +37,7 @@ Usage:
   apitest-gen dict     -spec <openapi.yaml> [-dict global-dict.json] [flags]
   apitest-gen discover -defaults defaults.json -base-url <url> [-token-env API_TOKEN] [-out defaults.resolved.json]
   apitest-gen check    -spec <openapi.yaml> [-defaults defaults.json]
-  apitest-gen review   -spec <openapi.yaml> [-dict global-dict.json] [-defaults defaults.json] [-out defaults.suggested.json]
+  apitest-gen review   -spec <openapi.yaml> [-dict global-dict.json] [-defaults defaults.json]
 
 Commands:
   apply     (default) update the dictionary, then write missing or invalid
@@ -52,9 +52,9 @@ Commands:
             exit code 1 if there is any (for CI)
   review    evaluate what apitest would report (spec findings such as
             heuristic bindings, cases it cannot send, values the generator
-            cannot create) and propose a fix for each; proposals for
-            defaults.json are written to -out for you to review, nothing
-            is applied
+            cannot create) and propose a fix for each; the proposals are
+            added to the defaults file (created if missing) with a "$review"
+            block; check them, then run apply
   help      show this help
 
 Flags:
@@ -137,13 +137,9 @@ func flags(name string, out io.Writer) (*flag.FlagSet, *options) {
 	fs.StringVar(&o.dict, "dict", "global-dict.json", "dictionary file; created if it does not exist")
 	fs.StringVar(&o.defaults, "defaults", "defaults.json", "values that win everywhere; several files comma-separated, later ones override earlier ones")
 	outHelp := "write the spec here instead of in place (apply)"
-	switch name {
-	case "discover":
+	if name == "discover" {
 		outHelp = "file for the fetched values"
 		o.out = "defaults.resolved.json"
-	case "review":
-		outHelp = "file for the proposals"
-		o.out = "defaults.suggested.json"
 	}
 	fs.StringVar(&o.out, "out", o.out, outHelp)
 	fs.StringVar(&o.baseURL, "base-url", "", "environment to fetch sources from, e.g. https://api.qa.example/v1")
@@ -240,6 +236,14 @@ func execute(o *options, out io.Writer) error {
 	if err := saveDict(o, d, out); err != nil {
 		return err
 	}
+	if target := firstDefaults(o); target != "" {
+		if _, err := os.Stat(target); errors.Is(err, os.ErrNotExist) {
+			if _, err := defaults.Update(target, nil, nil); err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "created %s (empty): put values there that must exist in the test environment\n", target)
+		}
+	}
 	if o.check {
 		written, err := spec.Load(context.Background(), target)
 		if err != nil {
@@ -311,18 +315,77 @@ func reviewCommand(o *options, out io.Writer) error {
 	}
 	if len(res.Suggestions) == 0 {
 		fmt.Fprintln(out, "nothing to review")
-		return nil
 	}
 	if o.dryRun {
 		fmt.Fprintln(out, "dry run: nothing written")
 		return nil
 	}
-	if err := os.WriteFile(o.out, res.File(), 0o600); err != nil {
+	target := firstDefaults(o)
+	add, block := res.Changes()
+	var rv any
+	if block != nil {
+		rv = block
+	}
+	changed, err := defaults.Update(target, add, rv)
+	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "please review %s: accept an entry by copying it into %s, or pass both files: -defaults %s,%s\n",
-		o.out, strings.Split(o.defaults, ",")[0], o.defaults, o.out)
+	if !changed {
+		fmt.Fprintf(out, "%s unchanged\n", target)
+		return nil
+	}
+	if block == nil {
+		fmt.Fprintf(out, "%s updated: nothing is open, the \"$review\" block was removed\n", target)
+		return nil
+	}
+	if n := countAdded(add, defs); n > 0 {
+		fmt.Fprintf(out, "%s updated: %d entries added, %d of them null (fill in a value); see \"$review\" at the top of the file\n",
+			target, n, countNull(add, defs))
+	} else {
+		fmt.Fprintf(out, "%s updated: nothing added; \"$review\" at the top of the file lists what is still open\n", target)
+	}
+	if block != nil {
+		fmt.Fprintf(out, "next: check %s, then run: %s\n", target, applyCommand(o))
+	}
 	return nil
+}
+
+// applyCommand is the apply command line for the same files; flags with
+// their default value are left out.
+func applyCommand(o *options) string {
+	cmd := "apitest-gen -spec " + o.spec
+	if o.dict != "global-dict.json" {
+		cmd += " -dict " + o.dict
+	}
+	if o.defaults != "defaults.json" {
+		cmd += " -defaults " + o.defaults
+	}
+	return cmd
+}
+
+// firstDefaults is the defaults file that review and apply write to.
+func firstDefaults(o *options) string {
+	return strings.TrimSpace(strings.Split(o.defaults, ",")[0])
+}
+
+func countAdded(add []defaults.Pair, defs *defaults.Defaults) int {
+	n := 0
+	for _, a := range add {
+		if !slices.ContainsFunc(defs.Keys(), func(k string) bool { return strings.EqualFold(k, a.Key) }) {
+			n++
+		}
+	}
+	return n
+}
+
+func countNull(add []defaults.Pair, defs *defaults.Defaults) int {
+	n := 0
+	for _, a := range add {
+		if a.Value == nil && !slices.ContainsFunc(defs.Keys(), func(k string) bool { return strings.EqualFold(k, a.Key) }) {
+			n++
+		}
+	}
+	return n
 }
 
 func compactJSON(v any) string {

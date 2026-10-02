@@ -95,3 +95,67 @@ func TestLoad(t *testing.T) {
 		t.Errorf("broken file: %v", err)
 	}
 }
+
+func TestNullAndRejected(t *testing.T) {
+	d, err := Parse([]byte(`{"zone": null, "code": "a", "$rejected": ["getApp.id"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.IsTodo("Zone") || d.Field("", "", "zone") != nil {
+		t.Error("null must be a todo without value")
+	}
+	if u := d.Unused(); len(u) != 1 || u[0] != "code" {
+		t.Errorf("unused: %v", u)
+	}
+	if len(d.Rejected) != 1 || d.Rejected[0] != "getApp.id" {
+		t.Errorf("rejected: %v", d.Rejected)
+	}
+}
+
+// Update keeps the order and values of a file, adds new keys once and
+// replaces the "$review" block.
+func TestUpdate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "defaults.json")
+	if err := os.WriteFile(path, []byte(`{"$review": "old", "b": 1, "a": {"x": [1, 2]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := Update(path, []Pair{{"B", 9}, {"c", nil}, {"d", "<x>"}}, map[string]string{"about": "new"})
+	if err != nil || !changed {
+		t.Fatal(changed, err)
+	}
+	got, _ := os.ReadFile(path)
+	want := `{
+  "$review": {
+    "about": "new"
+  },
+  "b": 1,
+  "a": {
+    "x": [
+      1,
+      2
+    ]
+  },
+  "c": null,
+  "d": "<x>"
+}
+`
+	if string(got) != want {
+		t.Errorf("got\n%s", got)
+	}
+	if changed, _ := Update(path, []Pair{{"c", 1}}, map[string]string{"about": "new"}); changed {
+		t.Error("nothing new, but the file changed")
+	}
+	if _, err := Update(path, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(path); strings.Contains(string(got), ReviewKey) {
+		t.Errorf("review block not removed:\n%s", got)
+	}
+	missing := filepath.Join(t.TempDir(), "new.json")
+	if _, err := Update(missing, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(missing); string(got) != "{}\n" {
+		t.Errorf("new file: %q", got)
+	}
+}

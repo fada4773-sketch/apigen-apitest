@@ -639,7 +639,7 @@ apitest-gen -spec openapi.yaml -dict global-dict.json -defaults defaults.json -c
   Plain names apply everywhere; `Dto.field` and `operationId.field` narrow them. `/planets/{id}` takes `planetId`, derived from the path. `x-…` keys set extensions, `bind` writes `x-apitest-bind` or `links`, and `from` fetches the value from a running environment (`-base-url`, `apitest-gen discover`).
 - The examples go **into the spec, in place** (or `-out`), where apitest reads them: parameter examples, request bodies, 2xx responses, at the `$ref` target of shared objects. Comments and key order stay; a second run changes nothing. A default that violates a schema stops the run before anything is written.
 - **`-check`** (or `apitest-gen check`) then reports every case apitest could not send and every example that violates its schema, with exit code 1 for CI. It uses apitest's own case building, so it sees what a real run would see.
-- **`apitest-gen review`** evaluates what apitest would report as spec findings (heuristic bindings, missing 401/403, invalid examples, …), the cases it cannot send and the values the generator cannot create, and proposes a fix for each in `defaults.suggested.json`. You review the proposals and accept them; nothing is applied on its own.
+- **`apitest-gen review`** evaluates what apitest would report as spec findings (heuristic bindings, missing 401/403, invalid examples, …), the cases it cannot send and the values the generator cannot create, and writes a fix for each into `defaults.json`. You check that file; the next `apitest-gen` run takes the entries into the spec.
 
 The flags you need most often:
 

@@ -7,49 +7,62 @@ This guide walks through one fictional project from start to finish: the **Starp
 
 Every flag and every key used here is described in [configuration.md](configuration.md#13-apitest-gen). The outputs shown are illustrative; your numbers depend on your spec.
 
-## Quick reference: review the suggestions and take them into the defaults
+## Quick reference: review, then apply
 
 ```sh
-# 1. propose fixes for everything apitest would report; writes defaults.suggested.json, changes nothing
-apitest-gen review -spec openapi.yaml -dict global-dict.json -defaults defaults.json -v
-
-# 2. review defaults.suggested.json in the editor (rules below): delete every active entry you reject,
-#    add the "$choose …" keys with real values
-
-# 3. optional: show what apply would change with the proposals; writes nothing
-apitest-gen -spec openapi.yaml -dict global-dict.json -defaults defaults.json,defaults.suggested.json -dry-run -v
-
-# 4. keep them: copy the active entries (all keys without "$") into defaults.json
-jq -s '.[0] + (.[1] | with_entries(select(.key | startswith("$") | not)))' defaults.json defaults.suggested.json > defaults.new.json
-mv defaults.new.json defaults.json
-rm defaults.suggested.json
-
-# 5. write them into the spec: bindings become x-apitest-bind or links, extensions are set
-apitest-gen -spec openapi.yaml -dict global-dict.json -defaults defaults.json -check
-
-# 6. confirm: nothing left, or only what needs a change of the spec
-apitest-gen review -spec openapi.yaml -dict global-dict.json -defaults defaults.json
+apitest-gen review -spec openapi.yaml
+# now open defaults.json and check it (rules below)
+apitest-gen -spec openapi.yaml
+apitest-gen review -spec openapi.yaml
 ```
 
-- **There is no accept flag.** `review` never writes into `defaults.json`. The file you reviewed is the decision. Step 4 copies it, and `apply` (step 5) takes it into the spec.
-- **`-defaults a.json,b.json`** reads both files, and later files win. That is enough to try or use the proposals (step 3), but they stay in a file you will overwrite with the next `review`. Keep accepted entries in `defaults.json`.
-- **jq needs an existing `defaults.json`.** On the first run, create one first: `echo '{}' > defaults.json`.
-- **Without jq,** copy the active entries by hand: every key without `$` in front, with its value.
+| Command | What it does |
+|---|---|
+| `apitest-gen review -spec openapi.yaml` | Finds everything apitest would report and **writes the fixes into `defaults.json`**. Creates the file if it does not exist. Changes neither the spec nor the dictionary. |
+| *you* | Check `defaults.json`. That is the only file you edit. |
+| `apitest-gen -spec openapi.yaml` | Updates `global-dict.json` and writes the examples, bindings and extensions from `defaults.json` into `openapi.yaml`. Creates `global-dict.json` and `defaults.json` if they are missing. |
+| `apitest-gen review -spec openapi.yaml` | Again, to see what is still open. When nothing is left, it prints `nothing to review`. |
 
-**Review rules:**
+`-dict global-dict.json` and `-defaults defaults.json` are the defaults, so you do not need to type them. Pass them only if your files have other names.
 
-| Entry | Check | Accept | Reject |
-|---|---|---|---|
-| `DEFAULT` binding `{"bind": "<producer>", "pointer": "/X"}` | Does the producer really return the value the consumer needs? Is `/X` the field the path parameter means, and is the producer the right resource? The guess comes from names. | keep the entry | delete it. Better: replace it with the right binding, or the parameter stays heuristic. |
-| `DEFAULT` `"<op>.x-apitest-forbidden": false` | Should the forbidden case run? | keep, if not | delete it and document 403 in the spec |
-| `$choose <key>` | Which value exists in the target environment? | add `"<key>": <value>`. Put environment values in a per-environment file, or use a source `{"from": "GET …", "pick": "…"}`. | leave it; the case stays without a value |
-| `$edit` | Is the key misspelled, or does it name a DTO? | correct the entry in `defaults.json` | – |
-| `$apply` | – | nothing to decide; step 5 fixes it | – |
-| `$spec` | What does the API really do? | change the spec as the entry says, e.g. add a 401 or rename a path | – |
+**What `review` writes into `defaults.json`:**
 
-- **Never accept a binding unseen.** A wrong binding fails in a way that is hard to see: the case gets a value, just the wrong one.
-- **Values that must exist** (ids, codes, seed data) come from you or from a source, never from the generator.
-- **Run `review` again after every change.** Keys already in `defaults.json` are not proposed again, so a second run shows what is still open.
+```json
+{
+  "$review": {
+    "about": "Written by apitest-gen review, replaced on every run. …",
+    "added": {
+      "getDock.dockCode": "Guessed by apitest from the names: createDock returns body /DockCode. Keep it if that is the dockCode getDock needs"
+    },
+    "fill in": {
+      "/pilots/{id}": "{id} has no binding and no default. … set the id of one that exists in the test environment (generated so far: 275)"
+    },
+    "apply fixes": [ "paths./docks/{dockCode}.get.responses.200…example: example does not match the schema: …" ],
+    "change the spec": [ "paths./pilots/{id}.get.responses: the operation requires a token but documents neither 401 nor 403; … Document the response …" ]
+  },
+  "getDock.dockCode": { "bind": "createDock", "pointer": "/DockCode" },
+  "/pilots/{id}": null
+}
+```
+
+- **New entries** (`getDock.dockCode`) are added at the end of the file. They take effect with the next `apitest-gen` run.
+- **`null`** means a value only you know. It takes no effect until you replace it.
+- **`$review`** at the top explains every new entry and lists what is still open. Each `review` run replaces it. apitest-gen ignores keys that start with `$`.
+
+**Review rules: what you do in `defaults.json`**
+
+| You see | Do this |
+|---|---|
+| a key under `"added"` with `"bind"` | Check the reason: does the operation really get its parameter from that field of that producer? If yes, leave it. If not, change `pointer`, or delete the entry. |
+| another key under `"added"` (e.g. `x-apitest-forbidden: false`) | Read the reason. Keep it, or delete it. |
+| you delete a proposed entry | Add its key to `"$rejected": ["getDock.dockCode"]`, so `review` does not propose it again. |
+| `null` (listed under `"fill in"`) | Replace it with a real value from the test environment: `"/pilots/{id}": 7`. If you do not know one yet, leave `null`: the run reports `DEFAULT_TODO` and goes on. |
+| `"apply fixes"` | Nothing. The next `apitest-gen` run fixes it. |
+| `"correct"` | An entry of yours is wrong or matches nothing. Correct it. |
+| `"change the spec"` | Only a change of `openapi.yaml` helps, for example a missing 401 or two paths with the same template. Do it by hand. |
+
+- **Never keep a binding unchecked.** It is a guess from names. A wrong one does not fail loudly: the case just uses the wrong value.
+- **Ids and codes that must exist** come from you or from a source (`{"from": "GET /docks", "pick": "/0/DockCode"}`), never from the generator.
 
 ## Contents
 
@@ -366,34 +379,35 @@ paths./ships/{id}.put.parameters[id]      parameter "id" is resolved heuristical
 paths./ships/{id}.delete.parameters[id]   parameter "id" is resolved heuristically from registerShip (body /Id); make it explicit with x-apitest-bind or links
 ```
 
-You don't have to fix these by hand. `review` evaluates every finding and proposes a fix:
+You don't have to fix these by hand. `review` evaluates every finding and writes the fix into `defaults.json`:
 
 ```sh
-apitest-gen review -spec ../api/openapi.yaml -dict global-dict.json -defaults defaults.json -v
+apitest-gen review -spec ../api/openapi.yaml
 ```
 
 ```text
 review: 3 suggestions; 3 defaults proposed, 0 values to choose, 0 defaults to correct, 0 fixed by apply, 0 to fix in the spec
   DEFAULT  getShip.id = {"bind":"registerShip","pointer":"/Id"}  (heuristic at paths./ships/{id}.get.parameters[id])
-           → Makes the guess explicit; apply writes it as x-apitest-bind (or a link for a shared parameter). Check that registerShip really returns the body /Id that getShip needs
   DEFAULT  updateShip.id = {"bind":"registerShip","pointer":"/Id"}  (heuristic at paths./ships/{id}.put.parameters[id])
   DEFAULT  scrapShip.id = {"bind":"registerShip","pointer":"/Id"}  (heuristic at paths./ships/{id}.delete.parameters[id])
-please review defaults.suggested.json: accept an entry by copying it into defaults.json, or pass both files: -defaults defaults.json,defaults.suggested.json
+defaults.json updated: 3 entries added, 0 of them null (fill in a value); see "$review" at the top of the file
+next: check defaults.json, then run: apitest-gen -spec ../api/openapi.yaml
 ```
 
-Nothing has changed yet. `defaults.suggested.json` holds the three bindings as active keys, each with a `$why` comment. Fixes that need a value from you or a change of the spec would be listed as `$choose …`, `$edit`, `$apply` and `$spec`. Review the bindings: `registerShip` returns the new ship with its `Id`, so they are right. Accept them and apply:
+The three bindings are now at the end of `defaults.json`, and `$review` at the top says why each one was added. Check them: `registerShip` returns the new ship with its `Id`, so they are right. Leave them and run:
 
 ```sh
-apitest-gen -spec ../api/openapi.yaml -dict global-dict.json -defaults defaults.json,defaults.suggested.json
-apitest-gen review -spec ../api/openapi.yaml -dict global-dict.json -defaults defaults.json
+apitest-gen -spec ../api/openapi.yaml
+apitest-gen review -spec ../api/openapi.yaml
 ```
 
 ```text
 review: 0 suggestions; 0 defaults proposed, 0 values to choose, 0 defaults to correct, 0 fixed by apply, 0 to fix in the spec
 nothing to review
+defaults.json updated: nothing is open, the "$review" block was removed
 ```
 
-The bindings are now `x-apitest-bind` entries in the spec, so the next report has no spec findings. Keep the accepted keys in `defaults.json` (copy them over, then delete the proposals file), so they survive a regenerated spec. All kinds of findings and their fixes: [configuration.md, 13.9](configuration.md#139-reviewing-findings).
+The bindings are now `x-apitest-bind` entries in the spec, so the next report has no spec findings. They also stay in `defaults.json`, so they survive a regenerated spec. When nothing is open, the `$review` block is removed again. All kinds of findings and their fixes: [configuration.md, 13.9](configuration.md#139-reviewing-findings).
 
 ## 7. Step 5: test against QA
 

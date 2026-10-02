@@ -10,6 +10,8 @@
 //	"UpdateApp.x-apitest-verify": false     an extension on the operation
 //	"GetApp.appCode": {"bind": "CreateApp", "pointer": "/AppCode"}
 //	                                        where apitest takes the parameter from
+//	"listDocks.zone": null                  no value yet: to be filled in
+//	"$rejected": ["GetApp.appCode"]          proposals "review" must not repeat
 //	"$comment": "…"                         ignored
 package defaults
 
@@ -35,6 +37,8 @@ type Entry struct {
 	// From is set for {"from": "GET /path", "pick": "/0/Code"}; such
 	// entries are resolved by "apitest-gen discover".
 	From *Source
+	// Todo is set for null: the key is known, its value is still missing.
+	Todo bool
 
 	uses int
 }
@@ -56,9 +60,12 @@ type Source struct {
 
 // Defaults is a loaded file.
 type Defaults struct {
-	Path    string
-	entries map[string]*Entry // lower-case key → entry
-	order   []string          // lower-case keys in file order
+	Path string
+	// Rejected are the keys of "$rejected": proposals of "apitest-gen
+	// review" that were turned down and must not be proposed again.
+	Rejected []string
+	entries  map[string]*Entry // lower-case key → entry
+	order    []string          // lower-case keys in file order
 }
 
 // Empty returns defaults without entries.
@@ -109,6 +116,14 @@ func Parse(b []byte) (*Defaults, error) {
 		if err := dec.Decode(&raw); err != nil {
 			return nil, fmt.Errorf("value of %q: %w", key, err)
 		}
+		if key == RejectedKey {
+			var list []string
+			if err := json.Unmarshal(raw, &list); err != nil {
+				problems = append(problems, fmt.Sprintf("%q must be a list of keys", key))
+			}
+			d.Rejected = append(d.Rejected, list...)
+			continue
+		}
 		if strings.HasPrefix(key, "$") {
 			continue
 		}
@@ -141,6 +156,10 @@ func entry(key string, raw json.RawMessage) (*Entry, error) {
 	dec.UseNumber()
 	if err := dec.Decode(&e.Value); err != nil {
 		return nil, fmt.Errorf("%q: %w", key, err)
+	}
+	if e.Value == nil {
+		e.Todo = true
+		return e, nil
 	}
 	obj, ok := e.Value.(map[string]any)
 	if !ok {
@@ -239,6 +258,23 @@ func (d *Defaults) Binding(operationID, param string) *Entry {
 	return nil
 }
 
+// Todos returns the keys whose value is still null, in file order.
+func (d *Defaults) Todos() []string {
+	var out []string
+	for _, k := range d.order {
+		if e := d.entries[k]; e.Todo {
+			out = append(out, e.Key)
+		}
+	}
+	return out
+}
+
+// IsTodo reports whether key is in the file with the value null.
+func (d *Defaults) IsTodo(key string) bool {
+	e := d.entries[strings.ToLower(key)]
+	return e != nil && e.Todo
+}
+
 // Sources returns the discovery entries, in file order.
 func (d *Defaults) Sources() []*Entry {
 	var out []*Entry
@@ -255,7 +291,7 @@ func (d *Defaults) Sources() []*Entry {
 func (d *Defaults) Unused() []string {
 	var out []string
 	for _, k := range d.order {
-		if e := d.entries[k]; e.uses == 0 && e.From == nil {
+		if e := d.entries[k]; e.uses == 0 && e.From == nil && !e.Todo {
 			out = append(out, e.Key)
 		}
 	}
@@ -273,7 +309,7 @@ type Usage struct {
 func (d *Defaults) Usage() []Usage {
 	var out []Usage
 	for _, k := range d.order {
-		if e := d.entries[k]; e.From == nil {
+		if e := d.entries[k]; e.From == nil && !e.Todo {
 			out = append(out, Usage{e.Key, e.uses})
 		}
 	}
@@ -319,6 +355,7 @@ func LoadAll(paths ...string) (*Defaults, error) {
 				return nil, err
 			}
 			out.Merge(d)
+			out.Rejected = append(out.Rejected, d.Rejected...)
 			if out.Path == "" {
 				out.Path = one
 			}

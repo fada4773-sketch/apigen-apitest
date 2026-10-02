@@ -1,5 +1,4 @@
 {
-  "$bindings": "accepted from apitest-gen review: the values apitest guessed, now explicit",
   "getBookByClass.class": {
     "bind": "createBook",
     "pointer": "/Class"
@@ -48,12 +47,10 @@
     "bind": "createStudent",
     "pointer": "/Id"
   },
-  "$class-moves": "PUT …/class/{class} moves all items of a class. The generated response example cannot know the new class, so only the schema is compared; the GET on the same path returns a list, which the GET check after a PUT cannot compare (plan OP-09)",
   "updateBookClass.x-apitest-compare": "schema",
   "updateBookClass.x-apitest-verify": false,
   "updateStudentClass.x-apitest-compare": "schema",
   "updateStudentClass.x-apitest-verify": false,
-  "$order": "deleting a class also deletes the item that the single DELETE needs, so delete by class last",
   "deleteBookClass.x-apitest-order": 10,
   "deleteStudentClass.x-apitest-order": 10
 }
