@@ -20,7 +20,7 @@ apitest-gen review -spec openapi.yaml
 |---|---|
 | `apitest-gen review -spec openapi.yaml` | Finds everything apitest would report and **writes real data into `defaults.json`**: the bindings apitest would guess, bindings to list GETs, and the ids used so far. No comments, no placeholders. Creates the file if it does not exist. Changes neither the spec nor the dictionary. The reasons are printed, with `-v` one per entry. |
 | *you* | Check the new entries at the end of `defaults.json`. That is the only file you edit. |
-| `apitest-gen -spec openapi.yaml` | Updates `global-dict.json` and writes the examples, bindings and extensions from `defaults.json` into `openapi.yaml`. Creates `global-dict.json` and `defaults.json` if they are missing. |
+| `apitest-gen -spec openapi.yaml` | Updates `global-dict.json` and writes the examples, bindings and extensions from `defaults.json` into `openapi.yaml`. Before saving, it checks every entry of `defaults.json` against the new spec (`verify`): a wrong pointer, a key that matches nothing or a binding that cannot be written stops the run, and **nothing is changed**. Creates `global-dict.json` and `defaults.json` if they are missing. |
 | `apitest-gen review -spec openapi.yaml` | Again, to see what is still open. Only problems the defaults cannot solve are left, such as a missing 401 in the spec. |
 
 `-dict global-dict.json` and `-defaults defaults.json` are the defaults, so you do not need to type them.
@@ -399,7 +399,7 @@ nothing to review
 defaults.json: nothing added
 ```
 
-The bindings are now `x-apitest-bind` entries in the spec, so the next report has no spec findings. They also stay in `defaults.json`, so they survive a regenerated spec. All kinds of findings and their fixes: [configuration.md, 13.9](configuration.md#139-reviewing-findings).
+The bindings are now `x-apitest-bind` entries in the spec, so the next report has no spec findings. They also stay in `defaults.json`, so they survive a regenerated spec. All kinds of findings and their fixes: [configuration.md, 13.10](configuration.md#1310-reviewing-findings).
 
 ## 7. Step 5: test against QA
 

@@ -476,3 +476,27 @@ func TestApplyBoundParameterFollowsProducer(t *testing.T) {
 		t.Errorf("response %v, first planet %v", planet["Id"], first["Id"])
 	}
 }
+
+func TestVerify(t *testing.T) {
+	verify := func(defaultsJSON string) []string {
+		t.Helper()
+		r := applyToFile(t, "lists.yaml", defaultsJSON, Options{Seed: 1})
+		if len(r.res.Fatal) > 0 {
+			t.Fatalf("fatal: %v", r.res.Fatal)
+		}
+		defs, _ := defaults.Parse([]byte(defaultsJSON))
+		return Verify(r.out, defs, r.res)
+	}
+	if p := verify(`{"getPlanetById.id": {"bind": "listPlanets", "pointer": "/0/Id"}, "getPlanet.x-apitest-verify": false}`); len(p) != 0 {
+		t.Errorf("problems for correct defaults: %v", p)
+	}
+	for _, c := range []struct{ defaults, want string }{
+		{`{"getPlanetById.id": {"bind": "listPlanets", "pointer": "/0/Nope"}}`, "nothing at /0/Nope"},
+		{`{"noSuchField": 1}`, "DEFAULT_UNUSED"},
+	} {
+		p := verify(c.defaults)
+		if len(p) != 1 || !strings.Contains(p[0], c.want) {
+			t.Errorf("%s: %v", c.defaults, p)
+		}
+	}
+}

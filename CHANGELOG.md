@@ -75,6 +75,14 @@ contain breaking changes, which are listed here.
   `$rejected` are not proposed again.
 - `defaults.json`: `null` marks a value still to be filled in
   (`DEFAULT_TODO`); `apply` creates an empty defaults file if it is missing.
+- `apitest-gen` (apply) verifies before it saves: the new spec is written
+  to a temporary file and loaded like apitest does, and every entry of the
+  defaults is checked against it (key matched and written, binding present
+  with its producer and a pointer that finds a value in the producer's
+  example, extension set, written examples valid). With a problem nothing
+  is written, the problems are listed and the exit code is 1.
+  `DEFAULT_UNUSED`, `SHARED_PARAM_CONFLICT` and `BIND_NOT_WRITTEN` now stop
+  the run.
 - A parameter bound in `defaults.json` takes its example from the
   producer's example at the pointer (`GetBooks` `/0/Id` = 550 → `id: 550`),
   so parameter, list and response examples agree.

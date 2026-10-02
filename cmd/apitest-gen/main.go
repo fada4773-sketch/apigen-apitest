@@ -224,12 +224,27 @@ func execute(o *options, out io.Writer) error {
 		}
 		return fmt.Errorf("%d problems with the defaults; nothing was written", len(res.Fatal))
 	}
+	// write the spec next to its target, load it the way apitest does and
+	// check every entry of the defaults against it; only then save anything
+	tmp, written, err := stageSpec(doc, target)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp)
+	if problems := apply.Verify(written, defs, res); len(problems) > 0 {
+		fmt.Fprintln(out, "verify: the defaults do not fit the written spec")
+		for _, p := range problems {
+			fmt.Fprintf(out, "  %s\n", p)
+		}
+		return fmt.Errorf("verify: %d problems; nothing was written, %s and %s are unchanged", len(problems), target, o.dict)
+	}
+	fmt.Fprintf(out, "verify: %d defaults entries checked against the written spec, no problems\n", defs.Len())
 	if o.dryRun {
 		fmt.Fprintln(out, "dry run: nothing written")
 		return nil
 	}
 	if res.Changed || o.out != "" {
-		if err := saveSpec(doc, target); err != nil {
+		if err := commitSpec(tmp, target); err != nil {
 			return err
 		}
 	}
@@ -399,32 +414,40 @@ func saveDict(o *options, d *dict.Dict, out io.Writer) error {
 	return nil
 }
 
-// saveSpec writes the document next to its target first and checks that
-// apitest can still load it; only then the target is replaced.
-func saveSpec(doc *yamldoc.Doc, target string) error {
+// stageSpec writes the document next to its target and loads it the way
+// apitest does. The caller verifies it, then commits or removes it.
+func stageSpec(doc *yamldoc.Doc, target string) (string, *spec.Spec, error) {
 	b, err := doc.Bytes()
 	if err != nil {
-		return err
+		return "", nil, err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(target), ".apitest-gen-*"+filepath.Ext(target))
 	if err != nil {
-		return err
+		return "", nil, err
 	}
-	defer os.Remove(tmp.Name())
 	if _, err := tmp.Write(b); err != nil {
 		tmp.Close()
-		return err
+		os.Remove(tmp.Name())
+		return "", nil, err
 	}
 	if err := tmp.Close(); err != nil {
-		return err
+		os.Remove(tmp.Name())
+		return "", nil, err
 	}
-	if _, err := spec.Load(context.Background(), tmp.Name()); err != nil {
-		return fmt.Errorf("the written spec does not load any more, %s was left unchanged: %w", target, err)
+	s, err := spec.Load(context.Background(), tmp.Name())
+	if err != nil {
+		os.Remove(tmp.Name())
+		return "", nil, fmt.Errorf("the written spec does not load any more, %s was left unchanged: %w", target, err)
 	}
+	return tmp.Name(), s, nil
+}
+
+// commitSpec replaces target with the staged file, keeping its mode.
+func commitSpec(tmp, target string) error {
 	if info, err := os.Stat(target); err == nil {
-		_ = os.Chmod(tmp.Name(), info.Mode().Perm())
+		_ = os.Chmod(tmp, info.Mode().Perm())
 	}
-	return os.Rename(tmp.Name(), target)
+	return os.Rename(tmp, target)
 }
 
 // headerFlags collects repeated -header "Name: value" flags.

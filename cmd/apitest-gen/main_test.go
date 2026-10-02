@@ -251,3 +251,52 @@ func TestCheck(t *testing.T) {
 		t.Errorf("missing spec: %d %q", code, errOut)
 	}
 }
+
+// A default that does not fit the written spec stops the run before
+// anything is saved: spec, dictionary and defaults stay as they are.
+func TestApplyVerifyFailsWritesNothing(t *testing.T) {
+	dir, path := copySpec(t, "lists.yaml")
+	before, _ := os.ReadFile(path)
+	defs := filepath.Join(dir, "defaults.json")
+	bad := `{"getPlanetById.id": {"bind": "listPlanets", "pointer": "/0/Nope"}, "noSuchField": 1}`
+	if err := os.WriteFile(defs, []byte(bad), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dictPath := filepath.Join(dir, "dict.json")
+	code, out, errOut := cli("-spec", path, "-dict", dictPath, "-defaults", defs)
+	if code != 1 || !strings.Contains(errOut, "nothing was written") {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	for _, want := range []string{"BIND_UNVERIFIED", `nothing at /0/Nope`, "DEFAULT_UNUSED", `"noSuchField"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if after, _ := os.ReadFile(path); string(after) != string(before) {
+		t.Error("the spec was changed")
+	}
+	if _, err := os.Stat(dictPath); err == nil {
+		t.Error("the dictionary was written")
+	}
+	if after, _ := os.ReadFile(defs); string(after) != bad {
+		t.Error("the defaults were changed")
+	}
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".apitest-gen-") {
+			t.Errorf("temporary file left: %s", e.Name())
+		}
+	}
+
+	// with the right pointer everything is written and verified
+	if err := os.WriteFile(defs, []byte(`{"getPlanetById.id": {"bind": "listPlanets", "pointer": "/0/Id"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut = cli("-spec", path, "-dict", dictPath, "-defaults", defs)
+	if code != 0 || !strings.Contains(out, "verify: 1 defaults entries checked") {
+		t.Fatalf("exit %d\n%s\n%s", code, out, errOut)
+	}
+	if after, _ := os.ReadFile(path); string(after) == string(before) {
+		t.Error("the spec was not written")
+	}
+}

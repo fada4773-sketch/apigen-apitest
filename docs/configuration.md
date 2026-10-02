@@ -856,11 +856,11 @@ For a step-by-step example, see [workflow.md](workflow.md).
 
 | Command | Does |
 |---|---|
-| `apitest-gen [apply] -spec …` | **default.** Updates the dictionary (creates it and an empty defaults file on the first run), then writes missing or invalid examples into the spec, in place or to `-out`. With `-base-url` the sources in the defaults are fetched first; with `-check` the written spec is checked afterwards. |
+| `apitest-gen [apply] -spec …` | **default.** Updates the dictionary (creates it and an empty defaults file on the first run), then writes missing or invalid examples into the spec, in place or to `-out`. With `-base-url` the sources in the defaults are fetched first. Before anything is saved, every entry of the defaults is checked against the written spec; with a problem nothing is written (see [13.8](#138-verify-before-saving)). With `-check` the written spec is also checked for cases apitest cannot send. |
 | `apitest-gen dict -spec …` | Only creates or updates the dictionary. |
 | `apitest-gen discover -defaults … -base-url …` | Fetches the sources of the defaults (`{"from": "GET …", "pick": …}`) and writes the values to `-out`. |
 | `apitest-gen check -spec …` | Reports every case apitest could not send and every example that violates its schema. Writes nothing. |
-| `apitest-gen review -spec …` | Evaluates everything apitest and apitest-gen would report: spec findings, cases that cannot be sent, values that cannot be generated, wrong defaults. Writes the fixes as data into the defaults file (the first of `-defaults`, created if missing): bindings, also to list GETs, and values; the reasons are printed (see [13.9](#139-reviewing-findings)). Changes neither spec nor dictionary. |
+| `apitest-gen review -spec …` | Evaluates everything apitest and apitest-gen would report: spec findings, cases that cannot be sent, values that cannot be generated, wrong defaults. Writes the fixes as data into the defaults file (the first of `-defaults`, created if missing): bindings, also to list GETs, and values; the reasons are printed (see [13.10](#1310-reviewing-findings)). Changes neither spec nor dictionary. |
 | `apitest-gen help` | Shows all commands and flags. |
 
 Exit codes: `0` success, `1` a problem (fatal defaults, `check` findings, a file that cannot be read or written), `2` wrong usage.
@@ -951,7 +951,7 @@ When apitest can take the id from a POST at run time (a binding), that value win
 
 ### 13.6 defaults.json
 
-A JSON object. Keys are compared without regard to case; two keys that differ only in case are an error. So in one operation a body field and a parameter of the same name (`Class` and `class`) share the key `"<operationId>.class"`; use `"Dto.Class"` for the field. Keys starting with `$` are comments, except `$rejected` (a list of keys `review` must not propose again, see 13.9). A value `null` means "still to be filled in": it has no effect and is reported as `DEFAULT_TODO`.
+A JSON object. Keys are compared without regard to case; two keys that differ only in case are an error. So in one operation a body field and a parameter of the same name (`Class` and `class`) share the key `"<operationId>.class"`; use `"Dto.Class"` for the field. Keys starting with `$` are comments, except `$rejected` (a list of keys `review` must not propose again, see 13.10). A value `null` means "still to be filled in": it has no effect and is reported as `DEFAULT_TODO`.
 
 | Key | Example | Applies to |
 |---|---|---|
@@ -1120,7 +1120,28 @@ The pilot of a ship is `Captain`. Every other pilot, for example in `Crew` or a 
 - **Values from `defaults.json` are kept here** once they are applied (`DICT_FROM_DEFAULTS`, counted in the spec summary line as `dictionary values from defaults`). A field key like `"Pilot.Name"` or a plain key sets the `value` of each field it matched. `"#/components/schemas/Person"` sets the `value` of a free DTO, or passes its fields to the DTO's own fields (not into other DTOs it refers to). A parameter default sets the parameter's `value`. Keys of the form `"<operationId>.<name>"` are not kept: a dictionary node is shared by every operation. A second run with the same defaults reports nothing. Remove a default later and the dictionary keeps its last value, so the examples stay as they are; change the value in the dictionary or set a new default to change them.
 - Fields and parameters that disappear from the spec are dropped and reported as `REMOVED`.
 
-### 13.8 Messages
+### 13.8 Verify before saving
+
+`apitest-gen` (apply) writes nothing until the result is checked. It writes the new spec into a temporary file next to the target, loads it the way apitest does, and goes through every entry of the defaults:
+
+| Check | Problem |
+|---|---|
+| every key matched something and was written | `DEFAULT_UNUSED`, `SHARED_PARAM_CONFLICT`, `BIND_NOT_WRITTEN` |
+| every binding is in the written spec (`x-apitest-bind` or a link) with that producer and pointer, and the pointer finds a value in the producer's example | `BIND_UNVERIFIED` |
+| every extension is set on its operation, with its value | `EXT_UNVERIFIED` |
+| every example that was written fits its schema; curated named examples are reported on their own | `EXAMPLE_SCHEMA` |
+
+With any problem, the problems are listed, the temporary file is removed, and the run exits with 1. **Nothing is written:** the spec, the dictionary and the defaults stay as they were.
+
+```text
+verify: the defaults do not fit the written spec
+  BIND_UNVERIFIED "GetBook.BookCode": GetBooks has nothing at /0/Code in its 200 response example; check the pointer
+apitest-gen apply: verify: 1 problems; nothing was written, ../api/oapi.yaml and global-dict.json are unchanged
+```
+
+Without problems it prints `verify: 18 defaults entries checked against the written spec, no problems` and saves. `-dry-run` runs the same checks and saves nothing either way. A default that violates a schema (`DEFAULT_INVALID`) stops the run even earlier, before the spec is composed.
+
+### 13.9 Messages
 
 Problems are always listed; messages marked *info* only with `-v`.
 
@@ -1141,12 +1162,15 @@ Problems are always listed; messages marked *info* only with `-v`.
 | `DEFAULTS_APPLIED` *info* | apply | defaults were set inside an existing or named example | – |
 | `EXAMPLE_INCOMPLETE` | apply | a required field or parameter has no value | set it in the defaults |
 | `EXTERNAL_REF` | apply | the target lives in another file | examples there are not written |
-| `SHARED_PARAM_CONFLICT` | apply | an operation-specific default for a parameter object shared by several operations | define the parameter in the operation |
+| `SHARED_PARAM_CONFLICT` | apply, **stops** | a default for a parameter object shared by several operations or paths cannot be written | a binding (`review` proposes one), or define the parameter in the operation |
 | `GENERIC_ID` *info* | apply | where the value of `{id}` came from | – |
 | `EXT_FROM_DEFAULTS` *info* | apply | an extension was set | – |
 | `BIND_WRITTEN` *info* | apply | a binding was written | – |
-| `BIND_NOT_WRITTEN` | apply | no place for the binding (shared response, no 2xx) | define the parameter in the operation |
-| `DEFAULT_UNUSED` | apply | a defaults key matched nothing; a key that names a DTO gets the hint `#/components/schemas/<Dto>` | check the spelling and the operationId |
+| `BIND_NOT_WRITTEN` | apply, **stops** | no place for the binding (shared response, no 2xx) | define the parameter in the operation |
+| `DEFAULT_UNUSED` | apply, **stops** | a defaults key matched nothing; a key that names a DTO gets the hint `#/components/schemas/<Dto>` | check the spelling and the operationId, or remove the key |
+| `BIND_UNVERIFIED` | verify, **stops** | a binding is not in the written spec as given, or its pointer finds nothing in the producer's example (`GetBooks has nothing at /0/Code`) | correct `bind` or `pointer` |
+| `EXT_UNVERIFIED` | verify, **stops** | an extension is missing on its operation, or has another value | check the operationId and the value |
+| `EXAMPLE_SCHEMA` | verify, **stops** | an example in the written spec violates its schema | report it; apply should never write one |
 | `DEFAULT_TODO` | apply | a defaults key has the value `null` | replace `null` with a real value |
 | `DICT_FROM_DEFAULTS` | dict | an applied default was kept in the dictionary | – |
 | `SOURCE_UNRESOLVED` | apply | sources without `-base-url` | `-base-url` or a `discover` file |
@@ -1159,7 +1183,7 @@ Problems are always listed; messages marked *info* only with `-v`.
 | `BINDING` | check | `x-apitest-bind` or `links` are invalid | fix the spec |
 | `CASES` | check | cases cannot be built at all, e.g. duplicate names | fix the spec |
 
-### 13.9 Reviewing findings
+### 13.10 Reviewing findings
 
 After a test run, the report lists **spec findings** such as
 
@@ -1253,7 +1277,7 @@ The Swagger 2.0 conversion note needs no fix and is not listed.
 4. Run `apitest-gen -spec openapi.yaml`. It updates `global-dict.json` and writes examples, bindings (`x-apitest-bind` or links) and extensions into the spec.
 5. Run `review` again. When nothing is open, it prints `nothing to review`.
 
-### 13.10 Using the results in apitest
+### 13.11 Using the results in apitest
 
 - **Same keys.** The keys of `defaults.json` work the same way as `Config.Params` (`"name"` and `"<operationId>.<name>"`). `check` uses the plain values of the defaults like `Config.Params`, so you can also pass them to apitest instead of writing them into the spec.
 - **One spec per environment.** Write environment values into a copy (`-out openapi.qa.yaml`) and point `Config.SpecPath` to it.

@@ -370,7 +370,10 @@ apitest-gen -spec openapi.yaml
 ```text
 dictionary global-dict.json created: 4 DTOs, 8 fields, 2 parameters; values: 10 new, 0 reused, 0 kept, 0 invalid, 0 repaired, 0 without value
 spec openapi.yaml: 20 examples added, 0 replaced, 0 with defaults, 0 kept, 0 incomplete; 6 extensions, 12 bindings; 0 dictionary values from defaults
+verify: 18 defaults entries checked against the written spec, no problems
 ```
+
+Before anything is saved, `apitest-gen` loads the written spec and checks all 18 entries of `defaults.json` against it (`verify`): every binding is there and its pointer finds a value in the example of `createBook`/`createStudent`, every extension is set. With a problem nothing is written.
 
 The path parameters are defined on the path, so they are shared by GET, PUT and DELETE. The 12 bindings are therefore written as `links` on the `201` of `createBook` and `createStudent`, not as `x-apitest-bind`:
 
@@ -445,6 +448,7 @@ go test -run TestFixed -v .
 ```text
 dictionary global-dict.json updated: 4 DTOs, 8 fields, 2 parameters; values: 0 new, 0 reused, 10 kept, 0 invalid, 0 repaired, 0 without value
 spec openapi.fixed.yaml: 20 examples added, 0 replaced, 0 with defaults, 0 kept, 0 incomplete; 6 extensions, 12 bindings; 0 dictionary values from defaults
+verify: 18 defaults entries checked against the written spec, no problems
 review: 0 suggestions; 0 defaults proposed, 0 values to choose, 0 defaults to correct, 0 fixed by apply, 0 to fix in the spec
 nothing to review
 defaults.json: nothing added

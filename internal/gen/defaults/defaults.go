@@ -294,6 +294,17 @@ func (d *Defaults) IsTodo(key string) bool {
 	return e != nil && e.Todo
 }
 
+// Bindings returns the binding entries, in file order.
+func (d *Defaults) Bindings() []*Entry {
+	var out []*Entry
+	for _, k := range d.order {
+		if e := d.entries[k]; e.Bind != nil {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // Sources returns the discovery entries, in file order.
 func (d *Defaults) Sources() []*Entry {
 	var out []*Entry
