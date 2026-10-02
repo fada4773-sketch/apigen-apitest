@@ -1,0 +1,30 @@
+# build and test output
+out/
+apitest-report/
+.cache/
+
+# local tools and editors
+.claude/
+.idea/
+.vscode/
+/.vscode
+*.swp
+.DS_Store
+
+# placeholders a sandboxed tool session may leave in the working directory
+/.bash_profile
+/.bashrc
+/.gitconfig
+/.gitmodules
+/.mcp.json
+/.profile
+/.ripgreprc
+/.zprofile
+/.zshrc
+/gin-app
+
+# local planning documents; only the published reference is versioned
+/docs/*
+!/docs/configuration.md
+/big-api/
+/example-gen/*

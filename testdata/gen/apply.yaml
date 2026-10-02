@@ -1,0 +1,78 @@
+openapi: 3.0.3
+info: { title: Apps, version: "1" }
+paths:
+  /apps:
+    post:
+      operationId: createApp
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/App" }
+            examples:
+              curated:
+                value: { AppCode: old, Name: Curated }
+              wrongApp:
+                x-example-defaults: false
+                value: { AppCode: missing, Name: Negative }
+      responses:
+        "201":
+          description: created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/App" }
+  # comment that must survive
+  /apps/{id}:
+    get:
+      operationId: getApp
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/App" }
+              example: { Id: 5, AppCode: kept, Name: Kept app }
+    put:
+      operationId: updateApp
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+        - $ref: "#/components/parameters/AppId"
+      requestBody:
+        $ref: "#/components/requestBodies/AppBody"
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/App" }
+              example: { Id: "not a number" }
+  /users/{key}:
+    parameters:
+      - { name: key, in: path, required: true, schema: { type: string } }
+    delete:
+      operationId: deleteUser
+      parameters:
+        - $ref: "#/components/parameters/AppId"
+      responses:
+        "204": { description: deleted }
+components:
+  parameters:
+    AppId:
+      name: appId
+      in: query
+      schema: { type: integer, minimum: 1 }
+  requestBodies:
+    AppBody:
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/App" }
+  schemas:
+    App:
+      type: object
+      required: [AppCode, Name]
+      properties:
+        Id: { type: integer, readOnly: true }
+        AppCode: { type: string, maxLength: 10 }
+        Name: { type: string }
+        Secret: { type: string, writeOnly: true }

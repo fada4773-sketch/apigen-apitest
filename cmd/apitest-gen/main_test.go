@@ -1,0 +1,253 @@
+package main
+
+import (
+	"bytes"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+const shop = "../../testdata/gen/shop.yaml"
+
+func cli(args ...string) (int, string, string) {
+	var out, errOut bytes.Buffer
+	code := run(args, &out, &errOut)
+	return code, out.String(), errOut.String()
+}
+
+func TestDictCreateUpdateDryRun(t *testing.T) {
+	dictPath := filepath.Join(t.TempDir(), "global-dict.json")
+
+	code, out, errOut := cli("dict", "-spec", shop, "-dict", dictPath)
+	if code != 0 || !strings.Contains(out, "created") || errOut != "" {
+		t.Fatalf("create: %d %q %q", code, out, errOut)
+	}
+	for _, want := range []string{"6 DTOs", "PATTERN_PENDING", "schemas.Garden.Address.Impossible", "TYPE_CONFLICT"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output misses %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "VALUE_NEW") {
+		t.Error("VALUE_NEW is only listed with -v")
+	}
+	first, err := os.ReadFile(dictPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// a second run keeps every value, even with another seed
+	code, out, _ = cli("dict", "-spec", shop, "-dict", dictPath, "-seed", "99")
+	if code != 0 || !strings.Contains(out, "updated") || !strings.Contains(out, "0 new") {
+		t.Fatalf("update: %d %q", code, out)
+	}
+	second, _ := os.ReadFile(dictPath)
+	if !bytes.Equal(first, second) {
+		t.Error("an update without spec changes changed the dictionary")
+	}
+
+	// dry run writes nothing
+	other := filepath.Join(t.TempDir(), "new.json")
+	code, out, _ = cli("dict", "-spec", shop, "-dict", other, "-dry-run", "-v")
+	if code != 0 || !strings.Contains(out, "dry run") || !strings.Contains(out, "VALUE_NEW") {
+		t.Fatalf("dry run: %d %q", code, out)
+	}
+	if _, err := os.Stat(other); !os.IsNotExist(err) {
+		t.Errorf("dry run wrote %s", other)
+	}
+}
+
+func TestUsageAndErrors(t *testing.T) {
+	if code, out, _ := cli("help"); code != 0 || !strings.Contains(out, "apitest-gen dict") || !strings.Contains(out, "-seed") {
+		t.Errorf("help: %d %q", code, out)
+	}
+	if code, out, _ := cli(); code != 0 || !strings.Contains(out, "Usage") {
+		t.Errorf("no arguments: %d %q", code, out)
+	}
+	if code, _, errOut := cli("frobnicate"); code != 2 || !strings.Contains(errOut, `unknown command "frobnicate"`) {
+		t.Errorf("unknown command: %d %q", code, errOut)
+	}
+	if code, _, errOut := cli("dict"); code != 2 || !strings.Contains(errOut, "-spec is required") {
+		t.Errorf("missing -spec: %d %q", code, errOut)
+	}
+	if code, _, errOut := cli("dict", "-spec", "does-not-exist.yaml"); code != 1 || errOut == "" {
+		t.Errorf("missing spec file: %d %q", code, errOut)
+	}
+	broken := filepath.Join(t.TempDir(), "broken.json")
+	if err := os.WriteFile(broken, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, errOut := cli("dict", "-spec", shop, "-dict", broken); code != 1 || !strings.Contains(errOut, "dictionary") {
+		t.Errorf("broken dictionary: %d %q", code, errOut)
+	}
+}
+
+// copySpec copies a test spec into a temporary directory.
+func copySpec(t *testing.T, name string) (dir, path string) {
+	t.Helper()
+	dir = t.TempDir()
+	b, err := os.ReadFile("../../testdata/gen/" + name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path = filepath.Join(dir, name)
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir, path
+}
+
+func TestApplyInPlace(t *testing.T) {
+	dir, path := copySpec(t, "apply.yaml")
+	before, _ := os.ReadFile(path)
+	defs := filepath.Join(dir, "defaults.json")
+	if err := os.WriteFile(defs, []byte(`{"AppCode": "a1", "appId": 7}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dictPath := filepath.Join(dir, "dict.json")
+
+	// without a subcommand, apitest-gen runs apply
+	code, out, errOut := cli("-spec", path, "-dict", dictPath, "-defaults", defs)
+	if code != 0 || errOut != "" {
+		t.Fatalf("apply: %d %q %q", code, out, errOut)
+	}
+	if !strings.Contains(out, "dictionary "+dictPath+" created") || !strings.Contains(out, "examples added") {
+		t.Errorf("output:\n%s", out)
+	}
+	after, _ := os.ReadFile(path)
+	if string(after) == string(before) || !strings.Contains(string(after), "AppCode: a1") {
+		t.Errorf("spec not written:\n%s", after)
+	}
+	if _, err := os.Stat(dictPath); err != nil {
+		t.Errorf("dictionary not written: %v", err)
+	}
+
+	// a second run changes nothing
+	if code, _, _ := cli("apply", "-spec", path, "-dict", dictPath, "-defaults", defs); code != 0 {
+		t.Fatalf("second run: %d", code)
+	}
+	again, _ := os.ReadFile(path)
+	if string(again) != string(after) {
+		t.Error("the second run changed the spec")
+	}
+}
+
+func TestApplyOutDryRunAndFatal(t *testing.T) {
+	dir, path := copySpec(t, "apply.yaml")
+	before, _ := os.ReadFile(path)
+	out := filepath.Join(dir, "out.yaml")
+	if code, _, errOut := cli("-spec", path, "-dict", filepath.Join(dir, "d.json"), "-defaults", filepath.Join(dir, "none.json"), "-out", out); code != 0 {
+		t.Fatalf("-out: %d %q", code, errOut)
+	}
+	if now, _ := os.ReadFile(path); string(now) != string(before) {
+		t.Error("-out changed the source spec")
+	}
+	if _, err := os.Stat(out); err != nil {
+		t.Errorf("-out not written: %v", err)
+	}
+
+	dry := filepath.Join(dir, "dry.json")
+	code, stdout, _ := cli("-spec", path, "-dict", dry, "-dry-run", "-v")
+	if code != 0 || !strings.Contains(stdout, "dry run: nothing written") || !strings.Contains(stdout, "EXAMPLE_ADDED") {
+		t.Errorf("dry run: %d\n%s", code, stdout)
+	}
+	if _, err := os.Stat(dry); !os.IsNotExist(err) {
+		t.Error("dry run wrote the dictionary")
+	}
+	if now, _ := os.ReadFile(path); string(now) != string(before) {
+		t.Error("dry run changed the spec")
+	}
+
+	bad := filepath.Join(dir, "bad.json")
+	if err := os.WriteFile(bad, []byte(`{"AppCode": "longer than ten characters"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, errOut := cli("-spec", path, "-dict", filepath.Join(dir, "d2.json"), "-defaults", bad)
+	if code != 1 || !strings.Contains(stdout, "FATAL DEFAULT_INVALID") || !strings.Contains(errOut, "nothing was written") {
+		t.Errorf("fatal: %d\n%s\n%s", code, stdout, errOut)
+	}
+	if now, _ := os.ReadFile(path); string(now) != string(before) {
+		t.Error("a fatal run changed the spec")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "d2.json")); !os.IsNotExist(err) {
+		t.Error("a fatal run wrote the dictionary")
+	}
+}
+
+func TestDiscoverAndApply(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.Header.Get("Authorization") != "Bearer qa-token" || r.Header.Get("X-Tenant") != "t1" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"Code": "old", "Active": false}, {"Code": "qa1", "Active": true}]`))
+	}))
+	defer srv.Close()
+	t.Setenv("QA_TOKEN", "qa-token")
+
+	dir, path := copySpec(t, "apply.yaml")
+	defs := filepath.Join(dir, "defaults.json")
+	if err := os.WriteFile(defs, []byte(`{"AppCode": {"from": "GET /apps", "pick": "/[Active=true]/Code"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolved := filepath.Join(dir, "qa.json")
+
+	code, out, errOut := cli("discover", "-defaults", defs, "-base-url", srv.URL, "-token-env", "QA_TOKEN", "-header", "X-Tenant: t1", "-out", resolved)
+	if code != 0 || !strings.Contains(out, `AppCode = "qa1" (GET /apps)`) {
+		t.Fatalf("discover: %d %q %q", code, out, errOut)
+	}
+	b, _ := os.ReadFile(resolved)
+	if strings.Contains(string(b), "qa-token") || !strings.Contains(string(b), `"AppCode": "qa1"`) {
+		t.Errorf("resolved file:\n%s", b)
+	}
+
+	// apply with the resolved file after the defaults
+	if code, out, errOut := cli("-spec", path, "-dict", filepath.Join(dir, "d.json"), "-defaults", defs+","+resolved); code != 0 || strings.Contains(out, "SOURCE_UNRESOLVED") {
+		t.Fatalf("apply with file: %d\n%s\n%s", code, out, errOut)
+	}
+	if spec, _ := os.ReadFile(path); !strings.Contains(string(spec), "AppCode: qa1") {
+		t.Errorf("value not in the spec:\n%s", spec)
+	}
+
+	// apply with -base-url fetches in memory; without, it warns
+	_, path2 := copySpec(t, "apply.yaml")
+	if code, out, _ := cli("-spec", path2, "-dict", filepath.Join(dir, "d2.json"), "-defaults", defs, "-base-url", srv.URL, "-token-env", "QA_TOKEN", "-header", "X-Tenant: t1"); code != 0 || !strings.Contains(out, "SOURCE_RESOLVED") {
+		t.Fatalf("apply -base-url: %d\n%s", code, out)
+	}
+	_, path3 := copySpec(t, "apply.yaml")
+	if code, out, _ := cli("-spec", path3, "-dict", filepath.Join(dir, "d3.json"), "-defaults", defs); code != 0 || !strings.Contains(out, "SOURCE_UNRESOLVED") {
+		t.Errorf("unresolved: %d\n%s", code, out)
+	}
+
+	// errors
+	if code, _, errOut := cli("discover", "-defaults", defs); code != 2 || !strings.Contains(errOut, "-base-url is required") {
+		t.Errorf("missing base url: %d %q", code, errOut)
+	}
+	if code, _, errOut := cli("discover", "-defaults", defs, "-base-url", srv.URL, "-token-env", "NOT_SET_ANYWHERE"); code != 1 || !strings.Contains(errOut, "NOT_SET_ANYWHERE is empty") {
+		t.Errorf("empty token env: %d %q", code, errOut)
+	}
+	if code, _, errOut := cli("discover", "-defaults", defs, "-base-url", srv.URL, "-header", "broken"); code != 2 || !strings.Contains(errOut, "Name: value") {
+		t.Errorf("bad header: %d %q", code, errOut)
+	}
+}
+
+func TestCheck(t *testing.T) {
+	code, out, errOut := cli("check", "-spec", "../../testdata/gen/apply.yaml", "-defaults", "none.json")
+	if code != 1 || !strings.Contains(out, "NOT_BUILDABLE") || !strings.Contains(out, "EXAMPLE_SCHEMA") || !strings.Contains(errOut, "problems") {
+		t.Errorf("check before apply: %d\n%s\n%s", code, out, errOut)
+	}
+	dir, path := copySpec(t, "apply.yaml")
+	code, out, _ = cli("-spec", path, "-dict", filepath.Join(dir, "d.json"), "-defaults", filepath.Join(dir, "none.json"), "-check")
+	if code != 0 || !strings.Contains(out, "check: 5 of 5 cases can be sent, 0 problems") {
+		t.Errorf("apply -check: %d\n%s", code, out)
+	}
+	if code, out, _ := cli("check", "-spec", path); code != 0 || !strings.Contains(out, "0 problems") {
+		t.Errorf("check after apply: %d\n%s", code, out)
+	}
+	if code, _, errOut := cli("check", "-spec", "missing.yaml"); code != 1 || errOut == "" {
+		t.Errorf("missing spec: %d %q", code, errOut)
+	}
+}
