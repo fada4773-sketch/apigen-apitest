@@ -4,6 +4,7 @@
 //
 //	"AppCode": "a"                          every field and parameter named AppCode
 //	"Garden.Name": "Berlin"                  field Name of DTO Garden
+//	"#/components/schemas/Garden": {…}      the DTO Garden itself, merged
 //	"listApps.pageSize": 50                 parameter or body field of one operation
 //	"/apps/{id}": 7                         the generic path parameter of this path
 //	"UpdateApp.x-apitest-verify": false     an extension on the operation

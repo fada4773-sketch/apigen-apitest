@@ -365,3 +365,36 @@ func TestOverlay(t *testing.T) {
 		t.Errorf("got %v", got)
 	}
 }
+
+// "#/components/schemas/<Dto>" sets the DTO itself: its schema example and
+// every place that holds it; a field default is laid over it.
+func TestApplyDTODefault(t *testing.T) {
+	r := applyToFile(t, "nested.yaml", `{
+	  "#/components/schemas/Person": {"name": "my", "age": 12},
+	  "Ship.Guest": {"age": 30},
+	  "person": {"name": "unused"}
+	}`, Options{Seed: 1})
+	if len(r.res.Fatal) > 0 {
+		t.Fatalf("fatal: %v", r.res.Fatal)
+	}
+	want := map[string]any{"name": "my", "age": json.Number("12")}
+	if got := example(t, r.doc, "components", "schemas", "Person", "example"); !reflect.DeepEqual(got, want) {
+		t.Errorf("schema example: %v", got)
+	}
+	req, _ := example(t, r.doc, "paths", "/ships", "post", "requestBody", "content", "application/json", "example").(map[string]any)
+	if !reflect.DeepEqual(req["Owner"], want) {
+		t.Errorf("owner: %v", req["Owner"])
+	}
+	if g, _ := req["Guest"].(map[string]any); g["name"] != "my" || g["age"] != json.Number("30") {
+		t.Errorf("guest: %v", req["Guest"])
+	}
+	// the existing example of updateShip has no Owner; none is added
+	upd, _ := example(t, r.doc, "paths", "/ships/{id}", "put", "requestBody", "content", "application/json", "example").(map[string]any)
+	if _, has := upd["Owner"]; has {
+		t.Errorf("field added to an existing example: %v", upd)
+	}
+	n := notes(r, CodeDefaultUnused)
+	if len(n) != 1 || !strings.Contains(n[0], `"#/components/schemas/Person"`) {
+		t.Errorf("unused: %v", n)
+	}
+}

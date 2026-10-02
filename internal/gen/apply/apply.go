@@ -89,9 +89,26 @@ func Apply(doc *yamldoc.Doc, s *spec.Spec, d *dict.Dict, defs *defaults.Defaults
 	}
 	a.schemaExamples()
 	for _, key := range defs.Unused() {
-		a.note(CodeDefaultUnused, "defaults", fmt.Sprintf("%q matched no field, parameter or operation; check the spelling", key))
+		msg := fmt.Sprintf("%q matched no field, parameter or operation; check the spelling", key)
+		if dto := a.dtoName(key); dto != "" {
+			msg = fmt.Sprintf("%q matched no field; to set the DTO %s itself use the key %q", key, dto, DTOKey(dto))
+		}
+		a.note(CodeDefaultUnused, "defaults", msg)
 	}
 	return a.res
+}
+
+// dtoName returns the DTO a key names, ignoring case, if it is one.
+func (a *applier) dtoName(key string) string {
+	if a.s.Doc.Components == nil {
+		return ""
+	}
+	for name := range a.s.Doc.Components.Schemas {
+		if strings.EqualFold(name, key) {
+			return name
+		}
+	}
+	return ""
 }
 
 type applier struct {
@@ -477,7 +494,7 @@ func (a *applier) build(ref *openapi3.SchemaRef, dto string, dn *dict.Node, name
 	}
 	if name != "" && !isLeaf(ref) {
 		if e := a.defs.Field(dto, op, name); e != nil {
-			gen, ok, _ := a.compose(ref, dto, dn, name, op, mode, depth, stack)
+			gen, ok, _ := a.dtoValue(ref, dto, dn, name, op, mode, depth, stack)
 			if !ok {
 				gen = nil // the default may provide what is missing
 			}
@@ -487,8 +504,37 @@ func (a *applier) build(ref *openapi3.SchemaRef, dto string, dn *dict.Node, name
 			return nil, false, dtoWhere(dto, name)
 		}
 	}
-	return a.compose(ref, dto, dn, name, op, mode, depth, stack)
+	return a.dtoValue(ref, dto, dn, name, op, mode, depth, stack)
 }
+
+// dtoValue composes the value of a place and lays the default of its DTO
+// ("#/components/schemas/<Dto>") over it.
+func (a *applier) dtoValue(ref *openapi3.SchemaRef, dto string, dn *dict.Node, name, op string, mode spec.Mode, depth int, stack []string) (any, bool, string) {
+	gen, ok, missing := a.compose(ref, dto, dn, name, op, mode, depth, stack)
+	e, where := a.dtoDefault(ref)
+	if e == nil {
+		return gen, ok, missing
+	}
+	if !ok {
+		gen = nil // the default may provide what is missing
+	}
+	if v := a.objectDefault(e, gen, ref, mode, where); v != nil {
+		return v, true, ""
+	}
+	return nil, false, where
+}
+
+// dtoDefault returns the default for the DTO a place refers to.
+func (a *applier) dtoDefault(ref *openapi3.SchemaRef) (*defaults.Entry, string) {
+	target := dict.DTORef(ref)
+	if target == "" {
+		return nil, ""
+	}
+	return a.defs.Plain(DTOKey(target)), "components.schemas." + target
+}
+
+// DTOKey is the defaults.json key for a whole DTO.
+func DTOKey(name string) string { return "#/components/schemas/" + name }
 
 // compose builds the value of one place without a default for the place
 // itself; defaults of nested fields are used.
@@ -573,9 +619,21 @@ func (a *applier) leaf(s *openapi3.Schema, dto string, dn *dict.Node, name, op s
 	return nil, false, where
 }
 
-// withDefaults sets defaults in the fields an existing example already has;
-// it never adds fields.
+// withDefaults sets defaults in the fields an existing example already has
+// and lays the default of its DTO over it.
 func (a *applier) withDefaults(v any, ref *openapi3.SchemaRef, dto string, stack []string, op string, mode spec.Mode, where string) (any, bool) {
+	nv, changed := a.fieldDefaults(v, ref, dto, stack, op, mode, where)
+	if e, at := a.dtoDefault(ref); e != nil && len(stack) <= 20 {
+		if ov := a.objectDefault(e, nv, ref, mode, at); ov != nil && !reflect.DeepEqual(spec.Normalize(ov), spec.Normalize(v)) {
+			return ov, true
+		}
+	}
+	return nv, changed
+}
+
+// fieldDefaults sets the defaults of the fields an existing example
+// already has; it never adds fields.
+func (a *applier) fieldDefaults(v any, ref *openapi3.SchemaRef, dto string, stack []string, op string, mode spec.Mode, where string) (any, bool) {
 	if ref == nil || ref.Value == nil || len(stack) > 20 {
 		return v, false
 	}
@@ -872,9 +930,16 @@ func (a *applier) schemaExamples() {
 			}
 			return v, ok
 		}
+		// a valid example keeps its values; only the defaults are set
+		fill := func(old any) (any, bool) {
+			if a.valid(s, old, spec.ModePlain) {
+				return a.withDefaults(old, self, "", nil, "", spec.ModePlain, where)
+			}
+			return build()
+		}
 		if exY := yamldoc.Get(node, "example"); exY != nil {
-			if old, err := yamldoc.Decode(exY); err == nil && !a.valid(s, old, spec.ModePlain) {
-				if v, ok := build(); ok {
+			if old, err := yamldoc.Decode(exY); err == nil {
+				if v, ok := fill(old); ok && v != nil {
 					a.write(node, "example", old, v, where+".example", s, spec.ModePlain)
 				}
 			}
@@ -888,17 +953,14 @@ func (a *applier) schemaExamples() {
 			}
 			changed := false
 			for i, item := range items {
-				if a.valid(s, item, spec.ModePlain) {
-					continue
-				}
-				if v, ok := build(); ok {
+				if v, ok := fill(item); ok && v != nil && !reflect.DeepEqual(spec.Normalize(v), spec.Normalize(item)) {
 					items[i], changed = v, true
 				}
 			}
 			if changed && yamldoc.Set(node, "examples", items) == nil {
 				a.res.Changed = true
 				a.res.Stats.Replaced++
-				a.note(CodeReplaced, where+".examples", "examples that did not fit the schema were replaced")
+				a.note(CodeReplaced, where+".examples", "examples were replaced or got their defaults")
 			}
 		}
 	}

@@ -273,7 +273,8 @@ func TestTPL2_21_AbortMidRun(t *testing.T) {
 func normalize(report string) string {
 	var out []string
 	for _, line := range strings.Split(report, "\n") {
-		if strings.HasPrefix(line, "| Start |") || strings.HasPrefix(line, "| Duration |") || strings.HasPrefix(line, "| Base URL |") {
+		if strings.HasPrefix(line, "| Start |") || strings.HasPrefix(line, "| Duration |") || strings.HasPrefix(line, "| Base URL |") ||
+			strings.HasPrefix(strings.TrimSpace(line), "Date: ") { // response header, differs when a second passes
 			continue
 		}
 		out = append(out, line)

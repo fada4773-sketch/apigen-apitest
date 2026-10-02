@@ -44,6 +44,12 @@ components:
           type: array
           items: { type: string }
         Settings: { type: object }
+        Owner: { $ref: "#/components/schemas/Person" }
+        Guest: { $ref: "#/components/schemas/Person" }
+    Person:
+      type: object
+      additionalProperties: true
+      example: {}
     Pilot:
       type: object
       required: [Name]

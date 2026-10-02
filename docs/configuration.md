@@ -941,6 +941,7 @@ A JSON object. Keys are compared without regard to case; two keys that differ on
 
 | Key | Example | Applies to |
 |---|---|---|
+| `#/components/schemas/Dto` | `"#/components/schemas/Pilot": {"Name": "Ada"}` | the DTO itself: its schema example and every place that holds it (see below) |
 | `Name` | `"PilotEmail": "test@starport.example"` | every field and parameter with this name, in every DTO, request, response and named example |
 | `Dto.Name` | `"ShipWrite.Name": "Test Ship"` | the field in this DTO (the nearest enclosing DTO counts) |
 | `operationId.Name` | `"updateShip.Name": "Renamed"` | parameters and body fields of this operation |
@@ -964,7 +965,7 @@ A key does not have to name a single value. Its value can also be an object or a
 | some fields of a DTO inside another DTO | `"Ship.Pilot"` | `{"Name": "Ada"}` |
 | the elements of a list of DTOs | `"Ship.Crew"` | `[{"Name": "Bo"}, {"Name": "Cy", "Rank": 5}]` |
 | the same DTO field everywhere the DTO is used | `"Pilot.Name"` | `"Ada"` |
-| a whole DTO everywhere | one `Dto.Field` key per field | `"Pilot.Name": "Ada"`, `"Pilot.Rank": 3` |
+| a whole DTO everywhere, also a free one | `"#/components/schemas/Pilot"` | `{"Name": "Ada", "Rank": 3}` |
 | a field in the body of one operation only | `"createShip.Pilot"`, `"createShip.Name"` | as above |
 
 The examples below use this spec:
@@ -1007,9 +1008,28 @@ gives `"Pilot": {"Name": "Ada", "Rank": 3}`. `Name` comes from the default and `
 
 gives two crew members, both with all their fields. A single object instead of a list counts as a one-element list.
 
-**A whole DTO.** There is no single key for a DTO itself. List its fields with the DTO name instead: `"Pilot.Name"` and `"Pilot.Rank"` apply wherever a `Pilot` is built. That covers a request body of type `Pilot`, the `Pilot` field of a `Ship` and every element of `Crew`. Fields you leave out keep their generated values. To fix a value for one operation only, use `"<operationId>.<Field>"`. It applies to the fields of that operation's body at any depth.
+**A whole DTO.** A plain key like `"Person"` names a **field** called `Person`, not the DTO `Person`. If no field has that name, the run reports `DEFAULT_UNUSED` with the right key. The DTO itself has its own key, its `$ref`:
 
-**Which DTO a key names.** In `"Ship.Pilot"`, `Ship` is the DTO that **contains** the field and `Pilot` is the field name. `"Pilot.Name"` names the field `Name` inside `Pilot`. When both apply, the object default is laid over last and wins:
+```yaml
+Person:
+  type: object
+  additionalProperties: true
+  example: {}
+```
+
+```json
+{ "#/components/schemas/Person": { "name": "my", "age": 12 } }
+```
+
+The value is merged like `"Ship.Pilot"`, wherever a `Person` is built or already exists:
+
+- `components.schemas.Person.example`: `{}` becomes `{"name": "my", "age": 12}`. An invalid example is regenerated with the default.
+- request and response bodies of type `Person`
+- every field that refers to it (`Owner: {$ref: Person}`) and every element of a `Person` list
+
+This is the only way to give a **free DTO** (no `properties`) a content, because it has no fields to name. For a DTO with `properties`, you can also set single fields with `"Person.Name"`. Fields left out keep their generated values. To fix a value for one operation only, use `"<operationId>.<Field>"`. It applies to the fields of that operation's body at any depth.
+
+**Which DTO a key names.** In `"Ship.Pilot"`, `Ship` is the DTO that **contains** the field and `Pilot` is the field name. `"Pilot.Name"` names the field `Name` inside `Pilot`. The layers are applied from general to specific, and the last one wins: generated value → `Pilot.Name` and other field keys inside the DTO → `#/components/schemas/Pilot` → `Ship.Pilot`.
 
 ```json
 {
@@ -1029,7 +1049,7 @@ The pilot of a ship is `Captain`. Every other pilot, for example in `Crew` or a 
 - **Fields cannot be removed.** A default adds or changes fields, but it cannot take out an optional field the generator added. To control every field, list every field.
 - **`null` is a value**, not "remove". It is only valid for `nullable` fields.
 - **The merged result is validated** against the schema of the place, with the pointer to the failing field. For example, `"Ship.Pilot": {"Rank": 9}` stops the run with `DEFAULT_INVALID … /Rank: number must be at most 5`. Nothing is written.
-- **A plain key** like `"Pilot"` also matches every field named `Pilot` in other DTOs. Use the `Dto.` form when the name is used for different things.
+- **A plain key** like `"Pilot"` matches every field named `Pilot`, in every DTO, never the DTO `Pilot` itself. Use the `Dto.` form when the name is used for different things.
 - **Objects and lists are not passed to apitest.** `-check` and `Config.Params` take plain values only (strings, numbers, booleans). Object defaults only shape the examples written into the spec.
 
 **Extensions** are set on the operation and overwrite a value that is already there. apitest's own extensions are type-checked, because apitest ignores wrong types silently:

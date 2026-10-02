@@ -59,6 +59,10 @@ contain breaking changes, which are listed here.
   into existing examples; fields left out keep their values, a list sets
   the length, readOnly/writeOnly fields are left out where they are not
   allowed. Previously such keys were ignored.
+- `"#/components/schemas/<Dto>": {…}` in `defaults.json` sets a DTO itself,
+  also a free one: its schema example and every body, field and list
+  element of that type. A key that names a DTO instead of a field is
+  reported with this key as a hint.
 - Free objects (`type: object` without `properties`) get `{}`, or entries
   from a typed `additionalProperties`, `minProperties` and `required`,
   instead of `NO_VALUE`.
