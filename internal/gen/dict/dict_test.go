@@ -50,6 +50,13 @@ func TestBuildStructure(t *testing.T) {
 	if city := garden.Properties["Address"].Properties["City"]; city == nil || city.Value == nil {
 		t.Errorf("Address.City: %+v", city)
 	}
+	// free objects get {} or, with typed additionalProperties, one entry
+	if v, ok := garden.Properties["Settings"].Value.(map[string]any); !ok || len(v) != 0 {
+		t.Errorf("Settings: %#v", garden.Properties["Settings"].Value)
+	}
+	if v, ok := garden.Properties["Labels"].Value.(map[string]any); !ok || len(v) != 1 {
+		t.Errorf("Labels: %#v", garden.Properties["Labels"].Value)
+	}
 	if !garden.Properties["GardenCode"].Required || garden.Properties["Email"].Required {
 		t.Error("required flags are wrong")
 	}
@@ -60,7 +67,7 @@ func TestBuildStructure(t *testing.T) {
 	c := codes(notes)
 	for code, where := range map[string]string{
 		CodePatternPending: "schemas.Garden.Address.Impossible",
-		CodeNoValue:        "schemas.Garden.Settings",
+		CodeNoValue:        "schemas.Garden.Sealed",
 		CodeTypeConflict:   "schemas.Garden.Kind",
 		CodeParamConflict:  "parameters.path.gardenCode",
 	} {

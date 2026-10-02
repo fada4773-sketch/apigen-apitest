@@ -36,11 +36,12 @@ const (
 	CodeIncomplete    = "EXAMPLE_INCOMPLETE" // a required field has no value
 	CodeExternalRef   = "EXTERNAL_REF"       // the target is in another file
 	CodeSharedParam   = "SHARED_PARAM_CONFLICT"
-	CodeGenericID     = "GENERIC_ID"        // where the value of {id} comes from
-	CodeExtension     = "EXT_FROM_DEFAULTS" // an extension was set on an operation
-	CodeBind          = "BIND_WRITTEN"      // a binding from defaults.json was written
-	CodeBindSkipped   = "BIND_NOT_WRITTEN"  // a binding could not be written
-	CodeDefaultUnused = "DEFAULT_UNUSED"    // a defaults entry matched nothing
+	CodeGenericID     = "GENERIC_ID"            // where the value of {id} comes from
+	CodeExtension     = "EXT_FROM_DEFAULTS"     // an extension was set on an operation
+	CodeBind          = "BIND_WRITTEN"          // a binding from defaults.json was written
+	CodeBindSkipped   = "BIND_NOT_WRITTEN"      // a binding could not be written
+	CodeDefaultUnused = "DEFAULT_UNUSED"        // a defaults entry matched nothing
+	CodeNamedInvalid  = "EXAMPLE_NAMED_INVALID" // a curated named example violates its schema
 )
 
 // Options control Apply.
@@ -86,6 +87,7 @@ func Apply(doc *yamldoc.Doc, s *spec.Spec, d *dict.Dict, defs *defaults.Defaults
 	for _, op := range s.Ops {
 		a.operation(op)
 	}
+	a.schemaExamples()
 	for _, key := range defs.Unused() {
 		a.note(CodeDefaultUnused, "defaults", fmt.Sprintf("%q matched no field, parameter or operation; check the spelling", key))
 	}
@@ -152,16 +154,19 @@ func (a *applier) operation(op *spec.Operation) {
 		}
 	}
 
-	// 2xx and default responses
+	// responses: 2xx and default get examples, the others only have
+	// invalid ones replaced, because apitest validates every example
 	if op.Op.Responses != nil {
 		respY := yamldoc.Get(opY, "responses")
-		for code, ref := range op.Op.Responses.Map() {
-			if (len(code) != 3 || code[0] != '2') && code != "default" || ref.Value == nil {
+		for _, code := range sortedKeys(op.Op.Responses.Map()) {
+			ref := op.Op.Responses.Map()[code]
+			if ref.Value == nil {
 				continue
 			}
+			success := (len(code) == 3 && code[0] == '2') || code == "default"
 			w := where + ".responses." + code
 			if target := a.target(yamldoc.Get(respY, code), w); target != nil {
-				a.content(op, ref.Value.Content, yamldoc.Get(target, "content"), spec.ModeResponse, w)
+				a.contentFor(op, ref.Value.Content, yamldoc.Get(target, "content"), spec.ModeResponse, w, !success)
 			}
 		}
 	}
@@ -376,6 +381,12 @@ func responseDTO(op *spec.Operation) string {
 // Bodies
 
 func (a *applier) content(op *spec.Operation, content openapi3.Content, contentY *yaml.Node, mode spec.Mode, where string) {
+	a.contentFor(op, content, contentY, mode, where, false)
+}
+
+// contentFor handles the media types of a body. With replaceOnly an
+// existing invalid example is replaced, but a missing one is not added.
+func (a *applier) contentFor(op *spec.Operation, content openapi3.Content, contentY *yaml.Node, mode spec.Mode, where string, replaceOnly bool) {
 	for _, mt := range sortedKeys(content) {
 		if !spec.IsJSON(mt) && !strings.EqualFold(strings.Split(mt, ";")[0], "application/x-www-form-urlencoded") {
 			continue
@@ -386,11 +397,11 @@ func (a *applier) content(op *spec.Operation, content openapi3.Content, contentY
 			continue
 		}
 		w := fmt.Sprintf("%s.content[%s]", where, mt)
-		a.media(op, media, mediaY, mode, w)
+		a.media(op, media, mediaY, mode, w, replaceOnly)
 	}
 }
 
-func (a *applier) media(op *spec.Operation, media *openapi3.MediaType, mediaY *yaml.Node, mode spec.Mode, where string) {
+func (a *applier) media(op *spec.Operation, media *openapi3.MediaType, mediaY *yaml.Node, mode spec.Mode, where string, replaceOnly bool) {
 	schema := media.Schema
 	var existing any
 	if ex := yamldoc.Get(mediaY, "example"); ex != nil {
@@ -417,6 +428,12 @@ func (a *applier) media(op *spec.Operation, media *openapi3.MediaType, mediaY *y
 			if err != nil {
 				continue
 			}
+			// curated test cases are never replaced, but an invalid one is
+			// named; request examples of a 4xx response are invalid on purpose
+			negativeTest := mode == spec.ModeRequest && negative(op)[name]
+			if !negativeTest && !a.valid(schema.Value, v, mode) {
+				a.note(CodeNamedInvalid, where+".examples."+name, "the named example does not fit its schema; apitest-gen keeps curated examples, fix it by hand")
+			}
 			if nv, changed := a.withDefaults(v, schema, "", nil, opName(op), mode, where+".examples."+name); changed {
 				if err := yamldoc.Set(exY, "value", nv); err == nil {
 					a.res.Changed = true
@@ -430,6 +447,9 @@ func (a *applier) media(op *spec.Operation, media *openapi3.MediaType, mediaY *y
 	// "example" and "examples" exclude each other; with named examples
 	// apitest builds one case per name and needs no "example"
 	if exsY := yamldoc.Get(mediaY, "examples"); exsY != nil && len(exsY.Content) > 0 {
+		return
+	}
+	if replaceOnly && (existing == nil || a.valid(schema.Value, existing, mode)) {
 		return
 	}
 	if existing != nil && !a.opt.Overwrite && a.valid(schema.Value, existing, mode) {
@@ -710,4 +730,80 @@ func sortedKeys[V any](m map[string]V) []string {
 	}
 	slices.Sort(keys)
 	return keys
+}
+
+// schemaExamples replaces invalid examples of components.schemas, which
+// apitest validates as well. Missing ones are not added: apitest builds
+// request bodies from the examples of the media types.
+func (a *applier) schemaExamples() {
+	if a.s.Doc.Components == nil {
+		return
+	}
+	for _, name := range sortedKeys(a.s.Doc.Components.Schemas) {
+		ref := a.s.Doc.Components.Schemas[name]
+		node := yamldoc.Path(a.doc.Root, "components", "schemas", name)
+		if ref == nil || ref.Value == nil || node == nil || yamldoc.Ref(node) != "" {
+			continue
+		}
+		s := ref.Value
+		where := "components.schemas." + name
+		self := &openapi3.SchemaRef{Ref: "#/components/schemas/" + name, Value: s}
+		build := func() (any, bool) {
+			v, ok, missing := a.build(self, "", nil, "", "", spec.ModePlain, 0, nil)
+			if !ok {
+				a.res.Stats.Incomplete++
+				a.note(CodeIncomplete, where, fmt.Sprintf("the example does not fit its schema and %s has no value to replace it", missing))
+			}
+			return v, ok
+		}
+		if exY := yamldoc.Get(node, "example"); exY != nil {
+			if old, err := yamldoc.Decode(exY); err == nil && !a.valid(s, old, spec.ModePlain) {
+				if v, ok := build(); ok {
+					a.write(node, "example", old, v, where+".example", s, spec.ModePlain)
+				}
+			}
+		}
+		// OpenAPI 3.1: a list of examples on the schema
+		if listY := yamldoc.Get(node, "examples"); listY != nil && listY.Kind == yaml.SequenceNode {
+			list, err := yamldoc.Decode(listY)
+			items, _ := list.([]any)
+			if err != nil {
+				continue
+			}
+			changed := false
+			for i, item := range items {
+				if a.valid(s, item, spec.ModePlain) {
+					continue
+				}
+				if v, ok := build(); ok {
+					items[i], changed = v, true
+				}
+			}
+			if changed && yamldoc.Set(node, "examples", items) == nil {
+				a.res.Changed = true
+				a.res.Stats.Replaced++
+				a.note(CodeReplaced, where+".examples", "examples that did not fit the schema were replaced")
+			}
+		}
+	}
+}
+
+// negative returns the names of request examples paired with a 4xx
+// response; they are invalid on purpose.
+func negative(op *spec.Operation) map[string]bool {
+	out := map[string]bool{}
+	if op.Op.Responses == nil {
+		return out
+	}
+	for code, r := range op.Op.Responses.Map() {
+		if len(code) != 3 || code[0] != '4' || r.Value == nil {
+			continue
+		}
+		for _, m := range r.Value.Content {
+			for name := range m.Examples {
+				out[name] = true
+			}
+		}
+	}
+	return out
 }

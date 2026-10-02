@@ -33,6 +33,17 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/App" }
               example: { Id: 5, AppCode: kept, Name: Kept app }
+        "400":
+          description: bad request
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Problem" }
+              example: { Code: 400 }
+        "404":
+          description: not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Problem" }
     put:
       operationId: updateApp
       parameters:
@@ -68,8 +79,14 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/App" }
   schemas:
+    Problem:
+      type: object
+      required: [Message]
+      properties:
+        Message: { type: string }
     App:
       type: object
+      example: { Id: "not a number", AppCode: x, Name: y }
       required: [AppCode, Name]
       properties:
         Id: { type: integer, readOnly: true }

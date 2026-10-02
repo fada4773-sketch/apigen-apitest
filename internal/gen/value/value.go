@@ -125,7 +125,8 @@ func (g *generator) value(s *openapi3.Schema, name string, depth int) (any, stri
 		return true, ""
 	case "array":
 		return g.array(s, name, depth)
-	case "object":
+	case "object", "":
+		// no type at all accepts anything; an object is the safest choice
 		return g.object(s, depth)
 	}
 	return nil, ReasonUnsupported
@@ -197,7 +198,7 @@ func merged(s *openapi3.Schema) *openapi3.Schema {
 
 func (g *generator) object(s *openapi3.Schema, depth int) (any, string) {
 	if len(s.Properties) == 0 {
-		return nil, ReasonUnsupported
+		return g.freeObject(s, depth)
 	}
 	out := map[string]any{}
 	names := make([]string, 0, len(s.Properties))
@@ -214,6 +215,42 @@ func (g *generator) object(s *openapi3.Schema, depth int) (any, string) {
 			continue
 		}
 		out[k] = v
+	}
+	return out, ""
+}
+
+// freeObject fills an object without properties: {} fits every such
+// schema, unless additionalProperties or minProperties ask for entries.
+func (g *generator) freeObject(s *openapi3.Schema, depth int) (any, string) {
+	out := map[string]any{}
+	extra := s.AdditionalProperties
+	closed := extra.Has != nil && !*extra.Has
+	var item *openapi3.Schema
+	n := int(s.MinProps)
+	if extra.Schema != nil && extra.Schema.Value != nil {
+		item = extra.Schema.Value
+		n = max(n, 1) // one entry shows what the map holds
+	}
+	keys := append([]string(nil), s.Required...)
+	for i := 0; len(keys) < n; i++ {
+		keys = append(keys, fmt.Sprintf("key%d", i+1))
+	}
+	if closed && len(keys) > 0 {
+		return nil, ReasonConstraints // entries required, but none allowed
+	}
+	for _, k := range keys {
+		if item == nil {
+			out[k] = g.word()
+			continue
+		}
+		v, reason := g.value(item, k, depth+1)
+		if reason != "" {
+			return nil, reason
+		}
+		out[k] = v
+	}
+	if s.MaxProps != nil && uint64(len(out)) > *s.MaxProps {
+		return nil, ReasonConstraints
 	}
 	return out, ""
 }

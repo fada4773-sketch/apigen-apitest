@@ -26,5 +26,6 @@ apitest-report/
 # local planning documents; only the published reference is versioned
 /docs/*
 !/docs/configuration.md
+!/docs/workflow.md
 /big-api/
 /example-gen/*

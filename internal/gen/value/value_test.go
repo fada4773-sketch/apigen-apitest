@@ -77,6 +77,30 @@ func TestGeneratedValuesFit(t *testing.T) {
 	}
 }
 
+func TestFreeObjects(t *testing.T) {
+	obj := &openapi3.Types{"object"}
+	for name, tc := range map[string]struct {
+		s    *openapi3.Schema
+		size int
+	}{
+		"plain":          {&openapi3.Schema{Type: obj}, 0},
+		"no type at all": {&openapi3.Schema{}, 0},
+		"typed map":      {&openapi3.Schema{Type: obj, AdditionalProperties: openapi3.AdditionalProperties{Schema: openapi3.NewSchemaRef("", &openapi3.Schema{Type: &openapi3.Types{"integer"}})}}, 1},
+		"minProperties":  {&openapi3.Schema{Type: obj, MinProps: 3}, 3},
+		"required keys":  {&openapi3.Schema{Type: obj, Required: []string{"a", "b"}}, 2},
+	} {
+		r := Generate(tc.s, Context{Path: name})
+		m, ok := r.Value.(map[string]any)
+		if !r.OK || !ok || len(m) != tc.size {
+			t.Errorf("%s: %+v", name, r)
+			continue
+		}
+		if errs := spec.NewValidator().Validate(tc.s, spec.Normalize(r.Value), spec.ModePlain); len(errs) > 0 {
+			t.Errorf("%s: %v does not fit: %v", name, r.Value, errs)
+		}
+	}
+}
+
 func TestSemanticNames(t *testing.T) {
 	str := &openapi3.Schema{Type: &openapi3.Types{"string"}}
 	for name, check := range map[string]func(string) bool{
@@ -113,12 +137,12 @@ func TestNoValue(t *testing.T) {
 		s      *openapi3.Schema
 		reason string
 	}{
-		"pattern":           {&openapi3.Schema{Type: &openapi3.Types{"string"}, Pattern: `^(?=a)b$`}, ReasonPattern},
-		"free object":       {&openapi3.Schema{Type: &openapi3.Types{"object"}}, ReasonUnsupported},
-		"min above max":     {&openapi3.Schema{Type: &openapi3.Types{"integer"}, Min: ptr(10.0), Max: ptr(5.0)}, ReasonConstraints},
-		"format too long":   {&openapi3.Schema{Type: &openapi3.Types{"string"}, Format: "uuid", MaxLength: ptr(uint64(5))}, ReasonConstraints},
-		"too few uniques":   {&openapi3.Schema{Type: &openapi3.Types{"array"}, MinItems: 3, UniqueItems: true, Items: openapi3.NewSchemaRef("", &openapi3.Schema{Type: &openapi3.Types{"boolean"}})}, ReasonConstraints},
-		"required no value": {&openapi3.Schema{Type: &openapi3.Types{"object"}, Required: []string{"z"}, Properties: openapi3.Schemas{"z": openapi3.NewSchemaRef("", &openapi3.Schema{Type: &openapi3.Types{"string"}, Pattern: "^(?=a)b$"})}}, ReasonPattern},
+		"pattern":                  {&openapi3.Schema{Type: &openapi3.Types{"string"}, Pattern: `^(?=a)b$`}, ReasonPattern},
+		"closed but needs entries": {&openapi3.Schema{Type: &openapi3.Types{"object"}, MinProps: 1, AdditionalProperties: openapi3.AdditionalProperties{Has: ptr(false)}}, ReasonConstraints},
+		"min above max":            {&openapi3.Schema{Type: &openapi3.Types{"integer"}, Min: ptr(10.0), Max: ptr(5.0)}, ReasonConstraints},
+		"format too long":          {&openapi3.Schema{Type: &openapi3.Types{"string"}, Format: "uuid", MaxLength: ptr(uint64(5))}, ReasonConstraints},
+		"too few uniques":          {&openapi3.Schema{Type: &openapi3.Types{"array"}, MinItems: 3, UniqueItems: true, Items: openapi3.NewSchemaRef("", &openapi3.Schema{Type: &openapi3.Types{"boolean"}})}, ReasonConstraints},
+		"required no value":        {&openapi3.Schema{Type: &openapi3.Types{"object"}, Required: []string{"z"}, Properties: openapi3.Schemas{"z": openapi3.NewSchemaRef("", &openapi3.Schema{Type: &openapi3.Types{"string"}, Pattern: "^(?=a)b$"})}}, ReasonPattern},
 	} {
 		if r := Generate(tc.s, Context{Path: name}); r.OK || r.Reason != tc.reason {
 			t.Errorf("%s: %+v, want reason %s", name, r, tc.reason)

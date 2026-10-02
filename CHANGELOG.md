@@ -50,6 +50,13 @@ contain breaking changes, which are listed here.
   for `apply -defaults defaults.json,defaults.qa.resolved.json`. `apply
   -base-url` does the same in memory. Only GET requests are sent; the token
   comes from an environment variable (`-token-env`) and is never printed.
+- `apitest-gen apply` replaces every invalid example apitest validates: also
+  in error responses and in `components.schemas` (missing ones are not
+  added there). Invalid curated named examples are kept and reported as
+  `EXAMPLE_NAMED_INVALID`.
+- Free objects (`type: object` without `properties`) get `{}`, or entries
+  from a typed `additionalProperties`, `minProperties` and `required`,
+  instead of `NO_VALUE`.
 - `apitest-gen check -spec openapi.yaml` (and `apply -check`) reports every
   case apitest could not send (`NOT_BUILDABLE`, with the reason) and every
   example that violates its schema, with exit code 1 for CI. It uses

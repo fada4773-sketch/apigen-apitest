@@ -47,6 +47,8 @@ components:
             Zip: { type: string, pattern: '^\d{5}$' }
             Impossible: { type: string, pattern: '^(?=a)b$' }
         Settings: { type: object }
+        Labels: { type: object, additionalProperties: { type: integer, minimum: 1 } }
+        Sealed: { type: object, minProperties: 1, additionalProperties: false }
         Kind:
           type: object
           allOf:

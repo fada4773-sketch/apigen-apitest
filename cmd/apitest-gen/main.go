@@ -135,7 +135,7 @@ func flags(name string, out io.Writer) (*flag.FlagSet, *options) {
 	fs.BoolVar(&o.overwrite, "overwrite", false, "replace existing valid examples too (apply)")
 	fs.StringVar(&o.genericIDs, "generic-ids", "id,uuid,key", "path parameter names that mean another resource on every path")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "show what would change, write nothing")
-	fs.BoolVar(&o.verbose, "v", false, "list every change, not only problems")
+	fs.BoolVar(&o.verbose, "v", false, "verbose: list every change and how often each default was used, not only problems")
 	fs.BoolVar(&o.check, "check", false, "apply: check the written spec afterwards and exit with 1 on problems")
 	return fs, o
 }

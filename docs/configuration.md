@@ -1,6 +1,8 @@
 # Configuration reference
 
-`apitest.Run(t, apitest.Config{...})` is the only entry point. This page explains every field of `Config`, the file formats and spec extensions it works with, and shows how they combine. The zero value of every field is a sensible default. Only `SpecPath` and one of `BaseURL` or `Handler` are required.
+`apitest.Run(t, apitest.Config{...})` is the only entry point of the library (`import "github.com/fada4773-sketch/apigen-apitest/apitest"`). This page explains every field of `Config`, the file formats and spec extensions it works with, and shows how they combine. The zero value of every field is a sensible default. Only `SpecPath` and one of `BaseURL` or `Handler` are required.
+
+apitest needs examples in the spec. If your spec has none or only a few, the command line tool `apitest-gen` writes them; its commands, flags and files are described in [section 13](#13-apitest-gen). [workflow.md](workflow.md) shows both tools together on a complete fictional project.
 
 The examples use a small organization API: organizations own workflows and deployments.
 
@@ -30,6 +32,7 @@ That is a complete test. apitest turns the examples in the spec into cases. It s
 10. [Spec extensions](#10-spec-extensions)
 11. [Recipes](#11-recipes)
 12. [All fields at a glance](#12-all-fields-at-a-glance)
+13. [apitest-gen](#13-apitest-gen)
 
 ---
 
@@ -836,3 +839,213 @@ go test ./... -run TestAPI -timeout 5m                      # remaining cases SK
 | `Hooks` | `Hooks` | none | [8](#8-hooks) |
 
 Relative paths (`SpecPath`, `DeviationsPath`, `ReportPath`) are resolved against the test package directory, like any file access in a Go test. Configuration mistakes stop the run before the first request, and each message says what is wrong and how to fix it.
+
+---
+
+## 13. apitest-gen
+
+`apitest-gen` prepares a spec for apitest. It keeps a dictionary of example values, writes missing or invalid examples into the spec, fetches seed values from a running environment and checks whether apitest can send every case. It works for any OpenAPI 3.x file, whatever language the API is written in.
+
+```sh
+go install github.com/fada4773-sketch/apigen-apitest/cmd/apitest-gen@latest
+```
+
+For a step-by-step example, see [workflow.md](workflow.md).
+
+### 13.1 Commands
+
+| Command | Does |
+|---|---|
+| `apitest-gen [apply] -spec …` | **default.** Updates the dictionary (creates it on the first run), then writes missing or invalid examples into the spec, in place or to `-out`. With `-base-url` the sources in the defaults are fetched first; with `-check` the written spec is checked afterwards. |
+| `apitest-gen dict -spec …` | Only creates or updates the dictionary. |
+| `apitest-gen discover -defaults … -base-url …` | Fetches the sources of the defaults (`{"from": "GET …", "pick": …}`) and writes the values to `-out`. |
+| `apitest-gen check -spec …` | Reports every case apitest could not send and every example that violates its schema. Writes nothing. |
+| `apitest-gen help` | Shows all commands and flags. |
+
+Exit codes: `0` success, `1` a problem (fatal defaults, `check` findings, a file that cannot be read or written), `2` wrong usage.
+
+### 13.2 Flags
+
+| Flag | Default | Commands | Meaning |
+|---|---|---|---|
+| `-spec <file>` | – | apply, dict, check | OpenAPI 3.0/3.1 file, YAML or JSON. **Required.** |
+| `-dict <file>` | `global-dict.json` | apply, dict | The dictionary; created if it does not exist. |
+| `-defaults <files>` | `defaults.json` | apply, discover, check | One or more defaults files, comma-separated; later files override earlier ones. A missing file counts as empty, a broken one is an error. |
+| `-out <file>` | in place | apply | Write the spec there instead of over `-spec`. |
+| `-out <file>` | `defaults.resolved.json` | discover | File for the fetched values. |
+| `-seed <n>` | `42` | apply, dict | Seed for **new** values. The same seed and field always give the same value; existing values are never touched by the seed. |
+| `-repair` | off | apply, dict | Regenerate dictionary values that no longer fit their schema. Without it they are kept and reported. |
+| `-overwrite` | off | apply | Replace valid existing examples too, not only missing or invalid ones. Named `examples` are never replaced. |
+| `-generic-ids <names>` | `id,uuid,key` | apply | Path parameter names that mean another resource on every path (see [13.5](#135-generic-path-ids)). |
+| `-check` | off | apply | Check the written spec afterwards; exit code 1 on problems. |
+| `-base-url <url>` | – | apply, discover | Environment to fetch sources from. |
+| `-token-env <name>` | – | apply, discover | Environment variable with a bearer token for `-base-url`. The token is never printed. |
+| `-header "Name: value"` | – | apply, discover | Extra header for `-base-url`; repeatable. |
+| `-dry-run` | off | apply, dict | Show what would change; write neither spec nor dictionary. |
+| `-v` | off | apply, dict | Verbose: list every change (`VALUE_NEW`, `EXAMPLE_ADDED`, `DEFAULTS_APPLIED`, …) and how often each default was used, not only problems. |
+
+### 13.3 Where examples are written
+
+apitest-gen writes where apitest reads:
+
+| Place | Written as |
+|---|---|
+| Parameters (path, query, header, cookie) on operation and path level | `parameter.example`. A parameter that is a `$ref` is written at its target in `components.parameters`, once. |
+| Request bodies (`application/json`, `*+json`, `application/x-www-form-urlencoded`) | `content[mt].example`, at the `components.requestBodies` target for a `$ref`. |
+| 2xx and `default` responses | `content[mt].example`, at the `components.responses` target for a `$ref`. |
+| Other responses (4xx, 5xx) | an existing `example` that violates its schema is replaced; missing ones are not added. |
+| `components.schemas.*` | an existing `example` (or an item of the 3.1 `examples` list) that violates its schema is replaced; missing ones are not added. |
+| Named `examples` | never replaced; only values from the defaults are set in the fields they already have. An invalid one is reported as `EXAMPLE_NAMED_INVALID`, except request examples paired with a 4xx response, which are negative tests. `x-example-defaults: false` on an example leaves it alone. |
+
+apitest validates every example it finds, so after a run of apitest-gen every example it wrote or kept fits its schema; only curated named examples can still be invalid, and they are reported. It never writes next to a `$ref` and never adds `example` next to `examples` (OpenAPI forbids both together). Response headers are left as they are. Read-only fields stay out of request examples, write-only fields out of response examples.
+
+Comments, key order and block style of the YAML are kept; JSON files stay JSON. Before the original is replaced, the written file is loaded again with apitest's loader; if that fails, the original stays unchanged. A second run with unchanged inputs changes nothing.
+
+### 13.4 Where a value comes from
+
+For every place, the first source with a value wins:
+
+1. **`defaults.json`**: a matching key (13.6), adjusted to the type if needed. It wins over everything, also inside existing examples.
+2. **An existing example** that fits its schema (unless `-overwrite`).
+3. **The dictionary**: the value of this DTO field or parameter.
+
+Values in the dictionary are created once and then kept:
+
+1. `const`, `default`, then an `enum` value
+2. a value for the `format` (`uuid`, `date`, `date-time`, `time`, `email`, `uri`, `hostname`, `ipv4`, `ipv6`, `byte`, `password`)
+3. a readable value for the field name and its DTO: names, cities, zip codes, phone numbers, versions, sentences for descriptions, "Brave Garden" for the `Name` of a `Garden`. Words are matched as whole words: `ReportCode` is a code, not a city.
+4. a string built from the `pattern` (ECMA-262, lookaheads included) and checked against the original pattern the way apitest validates
+5. a type-based value that meets `minimum`/`maximum`, `exclusive*`, `multipleOf`, `minLength`/`maxLength`, `minItems`/`maxItems` and `uniqueItems`
+6. for a **free object** (`type: object` or no type, without `properties`): `{}`, which fits every such schema. With `additionalProperties: {type: …}` it gets one entry of that type (`{"key1": 42}`), with `minProperties` that many entries, and keys listed in `required` are filled. Set a real structure in the dictionary or the defaults if the API expects one.
+
+A field gets **no value** (`NO_VALUE`, `PATTERN_PENDING`, `TYPE_CONFLICT`) only if no value can meet its constraints, for example `minProperties: 1` together with `additionalProperties: false`, a contradictory pattern, or `type: object` combined with an enum.
+
+Every value is validated against its schema before it is used. Compound names share one value across DTOs and parameters (`dockCode` and `DockCode`), generated for the strictest place first, so a parameter with a pattern and a field without one get the same value. Generic names (`Name`, `Id`, `Version`) get a value per DTO.
+
+### 13.5 Generic path ids
+
+A path parameter named `id` (or `uuid`, `key`, see `-generic-ids`) means another resource on every path. Its value comes from the first match of:
+
+1. `"<operationId>.id"` (not for parameters shared by several operations)
+2. the path key, e.g. `"/ships/{id}"`
+3. the resource derived from the path segment in front: `/ships/{id}` → `shipId`, `/categories/{id}` → `categoryId`, `/space-ports/{id}` → `spacePortId`
+4. `"<ResponseDTO>.id"`, the DTO of the lowest 2xx response
+5. the plain key `"id"`
+6. the value kept for this path in the dictionary (`paths`), or a newly generated one that is kept there
+
+When apitest can take the id from a POST at run time (a binding), that value wins anyway. The example only matters for operations without a producer.
+
+### 13.6 defaults.json
+
+A JSON object. Keys are compared without regard to case; two keys that differ only in case are an error. Keys starting with `$` are comments.
+
+| Key | Example | Applies to |
+|---|---|---|
+| `Name` | `"PilotEmail": "test@starport.example"` | every field and parameter with this name, in every DTO, request, response and named example |
+| `Dto.Name` | `"ShipWrite.Name": "Test Ship"` | the field in this DTO (the nearest enclosing DTO counts) |
+| `operationId.Name` | `"updateShip.Name": "Renamed"` | parameters and body fields of this operation |
+| `/path/{param}` | `"/ships/{id}": 7` | the generic path parameter of this path |
+| `operationId.x-name` | `"scrapShip.x-apitest-verify": false` | an extension on the operation |
+| `operationId.param` with `bind` | `"bookDock.dockCode": {"bind": "listDocks", "pointer": "/0/DockCode"}` | where apitest takes the parameter from at run time |
+| any key with `from` | `"DockCode": {"from": "GET /docks", "pick": "/[Active=true]/DockCode"}` | a value fetched by `discover` or `-base-url`, then used like a plain value |
+
+Priority for fields: `Dto.Name` before `operationId.Name` before `Name`.
+
+**Values** may be any JSON type. They are adjusted to the schema where this loses nothing: a single value for an array field becomes a one-element array, an array for a single field gives its first element, a numeric string becomes a number for numeric fields, and numbers and booleans become strings for string fields. A value that still violates the schema of a place it applies to stops the run with `DEFAULT_INVALID`, and nothing is written. For generic names like `Name` or `Code`, use the `Dto.` or `operationId.` form.
+
+**Extensions** are set on the operation and overwrite a value that is already there. apitest's own extensions are type-checked, because apitest ignores wrong types silently:
+
+| Extension | Allowed value |
+|---|---|
+| `x-apitest-verify` | `true`, `false` or `{"poll": true, "timeout": "30s"}` |
+| `x-apitest-skip` | a reason (string) or `true` |
+| `x-apitest-forbidden` | `true` or `false` |
+| `x-apitest-order` | a whole number |
+| `x-apitest-compare` | `"schema"`, `"subset"` or `"exact"` |
+| `x-apitest-ignore` | a list of field names or JSON pointers |
+
+`x-apitest-bind` and `x-apitest-compare-unordered` are rejected: apitest reads them on parameters and responses, not on operations. Other `x-…` extensions are set without a check. Removing a key later does not remove the extension from the spec.
+
+**Bindings** `{"bind": "<producer operationId>", "pointer": "/field"}` (or `"header": "Location"`, or `"pointer"` with `"request": true` for the body the producer sent) are written as `x-apitest-bind` when the parameter is defined in the operation. For a shared parameter they become a `links` entry on the producer's lowest 2xx response, unless that response is a shared component (`BIND_NOT_WRITTEN`).
+
+**Sources** `{"from": "GET /path", "pick": "…"}` are fetched with GET requests:
+
+- `pick` is a JSON pointer (`/0/DockCode`, `/items/2/id`, `~1` for `/`). A segment `[Field=value]` selects the first list element whose field has that value (`/[Active=true]/DockCode`); values compare with their JSON text.
+- `{Name}` in `from` is filled with another value (a plain default or another source); sources are fetched in that order, and a cycle is an error.
+- A failing request, an empty list or a `null` value stops the run. Nothing is invented.
+- Without `-base-url`, unresolved sources are reported as `SOURCE_UNRESOLVED` and the dictionary values are used.
+
+### 13.7 The dictionary
+
+`global-dict.json` is the memory of the generator. Commit it: it makes the examples stable across runs, machines and spec regenerations. It is plain JSON with sorted keys, so it diffs well:
+
+```json
+{
+  "version": 1,
+  "schemas": {
+    "ShipWrite": {
+      "type": "object",
+      "properties": {
+        "Callsign":  { "type": "string", "pattern": "^(?=.*\\d)[A-Z0-9]{4,8}$", "required": true, "value": "48213" },
+        "CargoTons": { "type": "number", "minimum": 0, "maximum": 500, "value": 212.4 },
+        "Pilot":     { "ref": "Pilot" }
+      }
+    },
+    "Vessel": { "ref": "ShipWrite" }
+  },
+  "parameters": {
+    "path.dockCode": { "type": "string", "pattern": "^[A-Z]{2}-\\d{3}$", "required": true, "value": "KD-418" }
+  },
+  "paths": { "/ships/{id}": 412 }
+}
+```
+
+- **Constraints** (`type`, `format`, `pattern`, `enum`, limits, `required`, `readOnly`, `writeOnly`, `nullable`) always come from the spec and are refreshed on every run.
+- **`value`** is write-protected. Edit it by hand and the next run keeps it as long as it fits. A value that no longer fits is reported as `VALUE_INVALID` and kept, unless you run with `-repair`.
+- **`ref`** marks a field that holds another DTO, also when the spec writes it as `allOf: [{$ref: X}, {…extensions only}]`, and a DTO that is only an alias of another (`Vessel: {$ref: ShipWrite}`). The value is built from that DTO. A DTO that extends another with `allOf` and own fields gets its own `properties`.
+- **`paths`** keeps the values of generic path ids per path.
+- Fields and parameters that disappear from the spec are dropped and reported as `REMOVED`.
+
+### 13.8 Messages
+
+Problems are always listed; messages marked *info* only with `-v`.
+
+| Code | Where | Meaning | What to do |
+|---|---|---|---|
+| `VALUE_NEW` *info* | dict | a value was generated | – |
+| `VALUE_REUSED` *info* | dict | taken from a field with the same compound name | – |
+| `VALUE_INVALID` | dict | a kept value no longer fits its schema | fix it, or `-repair` |
+| `VALUE_REPAIRED` | dict | an invalid value was regenerated | – |
+| `PATTERN_PENDING` | dict | no value matches the pattern | set one in the defaults, or fix the pattern |
+| `NO_VALUE` | dict | the constraints cannot be met, e.g. `minProperties: 1` with `additionalProperties: false` | fix the schema, or set a value in the dictionary or the defaults |
+| `TYPE_CONFLICT` | dict | `type: object` with an `allOf` of an enum: no value can be valid | remove `type: object` in the spec |
+| `PARAM_CONFLICT` | dict | one parameter name with different schemas in different operations | usually a spec mistake |
+| `REMOVED` | dict | no longer in the spec | – |
+| `EXAMPLE_ADDED` *info* | apply | an example was written | – |
+| `EXAMPLE_REPLACED` | apply | the existing example did not fit its schema (also in error responses and `components.schemas`) | – |
+| `EXAMPLE_NAMED_INVALID` | apply | a curated named example does not fit its schema; it is kept | fix it by hand |
+| `DEFAULTS_APPLIED` *info* | apply | defaults were set inside an existing or named example | – |
+| `EXAMPLE_INCOMPLETE` | apply | a required field or parameter has no value | set it in the defaults |
+| `EXTERNAL_REF` | apply | the target lives in another file | examples there are not written |
+| `SHARED_PARAM_CONFLICT` | apply | an operation-specific default for a parameter object shared by several operations | define the parameter in the operation |
+| `GENERIC_ID` *info* | apply | where the value of `{id}` came from | – |
+| `EXT_FROM_DEFAULTS` *info* | apply | an extension was set | – |
+| `BIND_WRITTEN` *info* | apply | a binding was written | – |
+| `BIND_NOT_WRITTEN` | apply | no place for the binding (shared response, no 2xx) | define the parameter in the operation |
+| `DEFAULT_UNUSED` | apply | a defaults key matched nothing | check the spelling and the operationId |
+| `SOURCE_UNRESOLVED` | apply | sources without `-base-url` | `-base-url` or a `discover` file |
+| `SOURCE_RESOLVED` | apply | a source was fetched | – |
+| `FATAL DEFAULT_INVALID` | apply | a default violates a schema; nothing written | fix or narrow the key |
+| `FATAL EXT_INVALID` | apply | an extension has the wrong type or belongs elsewhere | fix the value |
+| `FATAL BIND_INVALID` | apply | a binding names an unknown operation | fix the operationId |
+| `NOT_BUILDABLE` | check | apitest could not send this case; the reason says which value is missing | `apitest-gen apply`, or a default |
+| `EXAMPLE_SCHEMA` | check | an example violates its schema | `apitest-gen apply` replaces it |
+| `BINDING` | check | `x-apitest-bind` or `links` are invalid | fix the spec |
+| `CASES` | check | cases cannot be built at all, e.g. duplicate names | fix the spec |
+
+### 13.9 Using the results in apitest
+
+- **Same keys.** The keys of `defaults.json` work the same way as `Config.Params` (`"name"` and `"<operationId>.<name>"`). `check` uses the plain values of the defaults like `Config.Params`, so you can also pass them to apitest instead of writing them into the spec.
+- **One spec per environment.** Write environment values into a copy (`-out openapi.qa.yaml`) and point `Config.SpecPath` to it.
+- **Comparing generated examples.** Generated examples describe valid data, not the data of your environment. Against shared environments use `CompareMode: apitest.CompareSchema`. In-process tests, where the cases create their own data, can keep the default `subset` comparison.
+- **Run `check` in CI** before the tests. It fails as soon as a spec change leaves a case without a value.

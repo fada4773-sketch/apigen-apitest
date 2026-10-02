@@ -640,6 +640,20 @@ apitest-gen -spec openapi.yaml -dict global-dict.json -defaults defaults.json -c
 - The examples go **into the spec, in place** (or `-out`), where apitest reads them: parameter examples, request bodies, 2xx responses, at the `$ref` target of shared objects. Comments and key order stay; a second run changes nothing. A default that violates a schema stops the run before anything is written.
 - **`-check`** (or `apitest-gen check`) then reports every case apitest could not send and every example that violates its schema, with exit code 1 for CI. It uses apitest's own case building, so it sees what a real run would see.
 
+The flags you need most often:
+
+| Flag | Meaning |
+|---|---|
+| `-spec` | the OpenAPI file (required) |
+| `-dict` | the dictionary, default `global-dict.json` |
+| `-defaults` | one or more defaults files, comma-separated |
+| `-out` | write the spec there instead of in place |
+| `-check` | check the written spec, exit code 1 on problems |
+| `-dry-run` | show what would change, write nothing |
+| `-v` | verbose: also list every value and example written and how often each default was used; without it only problems are listed |
+
+`apitest-gen help` prints all commands and flags; [docs/configuration.md](docs/configuration.md#13-apitest-gen) describes every flag, every key of `defaults.json` and every message, and [docs/workflow.md](docs/workflow.md) walks through a complete example.
+
 With the examples removed from the Bookstore test spec, apitest can send 32 of 55 cases; after `apitest-gen`, all 55 run green.
 
 ## Example project: Swagger Petstore

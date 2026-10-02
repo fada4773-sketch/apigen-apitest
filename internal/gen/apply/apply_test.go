@@ -27,11 +27,16 @@ type run struct {
 // defaults and loads the result again with apitest's loader.
 func applyTo(t *testing.T, defaultsJSON string, opt Options) run {
 	t.Helper()
-	src, err := os.ReadFile("../../../testdata/gen/apply.yaml")
+	return applyToFile(t, "apply.yaml", defaultsJSON, opt)
+}
+
+func applyToFile(t *testing.T, file, defaultsJSON string, opt Options) run {
+	t.Helper()
+	src, err := os.ReadFile("../../../testdata/gen/" + file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(t.TempDir(), "apply.yaml")
+	path := filepath.Join(t.TempDir(), file)
 	if err := os.WriteFile(path, src, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -134,8 +139,8 @@ func TestApplyWritesExamples(t *testing.T) {
 	if kept["Name"] != "Kept app" || kept["AppCode"] != "a1" {
 		t.Errorf("kept example: %v", kept)
 	}
-	// an invalid existing example is replaced
-	if len(notes(r, CodeReplaced)) != 1 {
+	// invalid existing examples are replaced: a 200, a 400 and a DTO example
+	if len(notes(r, CodeReplaced)) != 3 {
 		t.Errorf("replaced: %v", notes(r, CodeReplaced))
 	}
 
@@ -253,5 +258,44 @@ func TestCoerce(t *testing.T) {
 	}
 	if v := coerce(true, code); v != "true" {
 		t.Errorf("bool to string: %#v", v)
+	}
+}
+
+// apitest validates every example, so apply replaces every invalid one: in
+// components.schemas and in error responses too, but it adds none there.
+func TestApplyReplacesEveryInvalidExample(t *testing.T) {
+	r := applyTo(t, `{}`, Options{Seed: 1})
+	if len(r.res.Fatal) > 0 {
+		t.Fatalf("fatal: %v", r.res.Fatal)
+	}
+	dto, _ := example(t, r.doc, "components", "schemas", "App", "example").(map[string]any)
+	if _, isNumber := dto["Id"].(json.Number); !isNumber {
+		t.Errorf("invalid DTO example not replaced: %v", dto)
+	}
+	problem, _ := example(t, r.doc, "paths", "/apps/{id}", "get", "responses", "400", "content", "application/json", "example").(map[string]any)
+	if _, ok := problem["Message"].(string); !ok {
+		t.Errorf("invalid 400 example not replaced: %v", problem)
+	}
+	if v := example(t, r.doc, "paths", "/apps/{id}", "get", "responses", "404", "content", "application/json", "example"); v != nil {
+		t.Errorf("an example was added to an error response: %v", v)
+	}
+	// nothing else is left for apitest to complain about
+	for _, f := range r.out.Findings {
+		if f.Kind == spec.FindingExampleSchema {
+			t.Errorf("finding left: %s %s", f.Where, f.Message)
+		}
+	}
+}
+
+// Curated named examples are never replaced; an invalid one is reported,
+// except a request example paired with a 4xx response (a negative test).
+func TestApplyReportsInvalidNamedExamples(t *testing.T) {
+	r := applyToFile(t, "named.yaml", `{}`, Options{Seed: 1})
+	if v := example(t, r.doc, "paths", "/moons", "post", "responses", "201", "content", "application/json", "examples", "broken", "value", "Name"); v != json.Number("7") {
+		t.Errorf("named example changed: %v", v)
+	}
+	n := notes(r, CodeNamedInvalid)
+	if len(n) != 1 || !strings.Contains(n[0], "responses.201") {
+		t.Errorf("named invalid: %v", n)
 	}
 }
