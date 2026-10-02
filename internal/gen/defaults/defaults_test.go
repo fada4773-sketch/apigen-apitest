@@ -94,6 +94,14 @@ func TestLoad(t *testing.T) {
 	if _, err := Load(broken); err == nil || !strings.Contains(err.Error(), broken) {
 		t.Errorf("broken file: %v", err)
 	}
+	for _, bad := range []string{`{"a": 1`, `{"a": 1} {}`, `{"a": 1} x`} {
+		if _, err := Parse([]byte(bad)); err == nil {
+			t.Errorf("%s: no error", bad)
+		}
+		if _, err := rawPairs([]byte(bad)); err == nil {
+			t.Errorf("rawPairs %s: no error", bad)
+		}
+	}
 }
 
 func TestNullAndRejected(t *testing.T) {

@@ -120,6 +120,9 @@ func rawPairs(b []byte) ([]rawPair, error) {
 		}
 		out = append(out, rawPair{key, raw})
 	}
+	if err := closeObject(dec); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 

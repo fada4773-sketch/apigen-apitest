@@ -141,7 +141,7 @@ func Parse(b []byte) (*Defaults, error) {
 		d.entries[lower] = e
 		d.order = append(d.order, lower)
 	}
-	if _, err := dec.Token(); err != nil && !errors.Is(err, io.EOF) {
+	if err := closeObject(dec); err != nil {
 		return nil, err
 	}
 	if len(problems) > 0 {
@@ -189,6 +189,25 @@ func entry(key string, raw json.RawMessage) (*Entry, error) {
 		e.Value, e.From = nil, src
 	}
 	return e, nil
+}
+
+// closeObject reads the closing brace of the top-level object and checks
+// that nothing follows. Without the check, Go 1.26 accepts "{" as empty.
+func closeObject(dec *json.Decoder) error {
+	tok, err := dec.Token()
+	if errors.Is(err, io.EOF) {
+		return errors.New("unexpected end of the file: the object is not closed with }")
+	}
+	if err != nil {
+		return err
+	}
+	if delim, ok := tok.(json.Delim); !ok || delim != '}' {
+		return fmt.Errorf("expected } at the end of the object, got %v", tok)
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return errors.New("unexpected content after the closing }")
+	}
+	return nil
 }
 
 // Len is the number of entries.

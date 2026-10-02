@@ -130,12 +130,14 @@ func TestLoadSave(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// compared with the mode before, not 0o640: Windows has no Unix modes
+	before, _ := os.Stat(path)
 	if err := d.Save(path); err != nil {
 		t.Fatal(err)
 	}
 	info, _ := os.Stat(path)
-	if info.Mode().Perm() != 0o640 {
-		t.Errorf("mode changed to %v", info.Mode().Perm())
+	if info.Mode().Perm() != before.Mode().Perm() {
+		t.Errorf("mode changed from %v to %v", before.Mode().Perm(), info.Mode().Perm())
 	}
 	if _, err := Load(path + ".missing"); err == nil {
 		t.Error("missing file must fail")
