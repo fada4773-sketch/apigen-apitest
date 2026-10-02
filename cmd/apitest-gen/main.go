@@ -321,31 +321,19 @@ func reviewCommand(o *options, out io.Writer) error {
 		return nil
 	}
 	target := firstDefaults(o)
-	add, block := res.Changes()
-	var rv any
-	if block != nil {
-		rv = block
-	}
-	changed, err := defaults.Update(target, add, rv)
+	add := res.Changes()
+	changed, err := defaults.Update(target, add, nil) // nil also drops an old "$review" block
 	if err != nil {
 		return err
 	}
-	if !changed {
-		fmt.Fprintf(out, "%s unchanged\n", target)
-		return nil
-	}
-	if block == nil {
-		fmt.Fprintf(out, "%s updated: nothing is open, the \"$review\" block was removed\n", target)
-		return nil
-	}
-	if n := countAdded(add, defs); n > 0 {
-		fmt.Fprintf(out, "%s updated: %d entries added, %d of them null (fill in a value); see \"$review\" at the top of the file\n",
-			target, n, countNull(add, defs))
-	} else {
-		fmt.Fprintf(out, "%s updated: nothing added; \"$review\" at the top of the file lists what is still open\n", target)
-	}
-	if block != nil {
-		fmt.Fprintf(out, "next: check %s, then run: %s\n", target, applyCommand(o))
+	n := countAdded(add, defs)
+	switch {
+	case n > 0:
+		fmt.Fprintf(out, "%s: %d entries added; check them, change or delete what is wrong, then run: %s\n", target, n, applyCommand(o))
+	case changed:
+		fmt.Fprintf(out, "%s: nothing added (old \"$review\" block removed)\n", target)
+	default:
+		fmt.Fprintf(out, "%s: nothing added\n", target)
 	}
 	return nil
 }
@@ -372,16 +360,6 @@ func countAdded(add []defaults.Pair, defs *defaults.Defaults) int {
 	n := 0
 	for _, a := range add {
 		if !slices.ContainsFunc(defs.Keys(), func(k string) bool { return strings.EqualFold(k, a.Key) }) {
-			n++
-		}
-	}
-	return n
-}
-
-func countNull(add []defaults.Pair, defs *defaults.Defaults) int {
-	n := 0
-	for _, a := range add {
-		if a.Value == nil && !slices.ContainsFunc(defs.Keys(), func(k string) bool { return strings.EqualFold(k, a.Key) }) {
 			n++
 		}
 	}

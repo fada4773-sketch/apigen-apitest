@@ -426,3 +426,33 @@ func TestApplyKeepsDefaultsInDictionary(t *testing.T) {
 		t.Errorf("stats: %d, notes %v", r.res.Stats.Dict, notes(r, CodeDictDefault))
 	}
 }
+
+// A response example agrees with the path: the Id of the planet read by
+// id is the id of the path, the moons of a planet carry its id, and a
+// value from the defaults is kept in the DTO field of the dictionary.
+func TestApplyMatchesPathValues(t *testing.T) {
+	r := applyToFile(t, "lists.yaml", `{"/Planet/id/{id}": 100, "/Planet/id/{id}/Moon": 7, "Code": "terra"}`, Options{Seed: 1})
+	if len(r.res.Fatal) > 0 {
+		t.Fatalf("fatal: %v", r.res.Fatal)
+	}
+	get := func(path string) any {
+		return example(t, r.doc, "paths", path, "get", "responses", "200", "content", "application/json", "example")
+	}
+	if p, _ := get("/Planet/id/{id}").(map[string]any); p["Id"] != json.Number("100") {
+		t.Errorf("planet by id: %v", p)
+	}
+	if p, _ := get("/Planet/{Code}").(map[string]any); p["Code"] != "terra" {
+		t.Errorf("planet by code: %v", p)
+	}
+	moons, _ := get("/Planet/id/{id}/Moon").([]any)
+	if m, _ := moons[0].(map[string]any); len(moons) != 1 || m["PlanetId"] != json.Number("7") {
+		t.Errorf("moons of planet: %v", moons)
+	}
+	// /Planet/{Code}/Moon/id/{id}: Code names the planet, not the moon
+	if m, _ := get("/Planet/{Code}/Moon/id/{id}").(map[string]any); m["Code"] != nil {
+		t.Errorf("moon got the planet code: %v", m)
+	}
+	if v := r.dict.Schemas["PlanetRead"].Properties["Id"].Value; v != json.Number("100") {
+		t.Errorf("dictionary PlanetRead.Id: %v", v)
+	}
+}

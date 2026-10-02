@@ -92,14 +92,13 @@ func TestReviewSkipsKnownKeys(t *testing.T) {
 	}
 }
 
-// review writes its proposals into defaults.json: entries with a value,
-// null for values only the user knows, and the "$review" block. A second
-// run proposes nothing twice; null keys stay listed as open.
+// review writes data only into defaults.json: proposed bindings and
+// values, and for values only the user knows the value used so far. No
+// comments, no null. A second run proposes nothing twice.
 func TestReviewUpdatesDefaults(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "defaults.json")
 	r := review(t, `{}`)
-	add, block := r.Changes()
-	if changed, err := defaults.Update(path, add, block); err != nil || !changed {
+	if changed, err := defaults.Update(path, r.Changes(), nil); err != nil || !changed {
 		t.Fatalf("update: %v %v", changed, err)
 	}
 	b, _ := os.ReadFile(path)
@@ -107,27 +106,22 @@ func TestReviewUpdatesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%s", err, b)
 	}
-	if n := len(defs.Keys()) - len(defs.Todos()); n != r.Count(ActionDefault) {
-		t.Errorf("entries with a value: %d, want %d", n, r.Count(ActionDefault))
+	if strings.Contains(string(b), "$") || len(defs.Todos()) > 0 {
+		t.Errorf("comments or null written:\n%s", b)
 	}
-	if !defs.IsTodo("listDocks.zone") || !strings.Contains(string(b), `"$review": {`) {
-		t.Errorf("file:\n%s", b)
+	if defs.Plain("/pilots/{id}") == nil {
+		t.Errorf("the generated id is not written:\n%s", b)
+	}
+	if defs.Plain("getDock.dockCode") != nil || defs.Binding("getDock", "dockCode") == nil {
+		t.Errorf("binding missing:\n%s", b)
+	}
+	if defs.IsTodo("listDocks.zone") || strings.Contains(string(b), "listDocks.zone") {
+		t.Errorf("a value nobody knows is written:\n%s", b)
 	}
 
 	again := review(t, string(b))
-	if n := again.Count(ActionDefault); n != 0 {
+	if n := len(again.Changes()); n != 0 {
 		t.Errorf("proposed again: %d", n)
-	}
-	if s := find(again, ActionChoose, "listDocks.zone"); s == nil {
-		t.Error("a null key is no longer listed as open")
-	}
-	add, block = again.Changes()
-	if _, err := defaults.Update(path, add, block); err != nil {
-		t.Fatal(err)
-	}
-	// the entry stays once; "$review" no longer lists it as added
-	if b2, _ := os.ReadFile(path); strings.Count(string(b2), `"getDock.dockCode":`) != 1 {
-		t.Errorf("entry duplicated or lost:\n%s", b2)
 	}
 }
 
@@ -145,5 +139,44 @@ func TestClosest(t *testing.T) {
 	}
 	if c := closest("xyz", []string{"getDock"}); c != "" {
 		t.Errorf("closest: %q", c)
+	}
+}
+
+// Without POSTs, path parameters are bound to the first element of a list
+// GET of their resource.
+func TestReviewListBindings(t *testing.T) {
+	const path = "../../../testdata/gen/lists.yaml"
+	s, err := spec.Load(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, notes, _ := dict.Build(s, nil, dict.Options{Seed: 1})
+	defs := defaults.Empty()
+	doc, err := yamldoc.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := []string{"id"}
+	res := apply.Apply(doc, s, d, defs, apply.Options{Seed: 1, GenericIDs: ids})
+	r := Run(Input{Spec: s, Dict: d, DictNotes: notes, Defaults: defs, GenericIDs: ids, Apply: res})
+	want := map[string]string{
+		"getPlanetById.id":     `{"bind":"listPlanets","pointer":"/0/Id"}`,
+		"getPlanet.Code":       `{"bind":"listPlanets","pointer":"/0/Code"}`,
+		"listMoonsOfPlanet.id": `{"bind":"listPlanets","pointer":"/0/Id"}`,
+		"getMoon.Code":         `{"bind":"listPlanets","pointer":"/0/Code"}`,
+		"getMoon.id":           `{"bind":"listMoonsOfPlanet","pointer":"/0/Id"}`,
+	}
+	got := map[string]string{}
+	for _, p := range r.Changes() {
+		b, _ := json.Marshal(p.Value)
+		got[p.Key] = string(b)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s: got %s, want %s", k, got[k], v)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("got %v", got)
 	}
 }

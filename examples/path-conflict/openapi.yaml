@@ -68,7 +68,7 @@ paths:
               schema: {$ref: "#/components/schemas/Book"}
               example:
                 Class: K
-                Id: 981
+                Id: 404
                 Title: Every Sink
         "404": {$ref: "#/components/responses/NotFound"}
         "401": {$ref: "#/components/responses/Unauthorized"}
@@ -91,7 +91,7 @@ paths:
               schema: {$ref: "#/components/schemas/Book"}
               example:
                 Class: K
-                Id: 981
+                Id: 404
                 Title: Every Sink
         "404": {$ref: "#/components/responses/NotFound"}
         "401": {$ref: "#/components/responses/Unauthorized"}
@@ -115,7 +115,7 @@ paths:
             application/json:
               schema: {type: array, items: {$ref: "#/components/schemas/Book"}}
               example:
-                - Class: K
+                - Class: J
                   Id: 981
                   Title: Every Sink
         "401": {$ref: "#/components/responses/Unauthorized"}
@@ -136,7 +136,7 @@ paths:
             application/json:
               schema: {type: array, items: {$ref: "#/components/schemas/Book"}}
               example:
-                - Class: K
+                - Class: J
                   Id: 981
                   Title: Every Sink
         "401": {$ref: "#/components/responses/Unauthorized"}
@@ -212,7 +212,7 @@ paths:
               schema: {$ref: "#/components/schemas/Student"}
               example:
                 Class: B
-                Id: 922
+                Id: 307
                 Name: Any Student
         "404": {$ref: "#/components/responses/NotFound"}
         "401": {$ref: "#/components/responses/Unauthorized"}
@@ -235,7 +235,7 @@ paths:
               schema: {$ref: "#/components/schemas/Student"}
               example:
                 Class: B
-                Id: 922
+                Id: 307
                 Name: Any Student
         "404": {$ref: "#/components/responses/NotFound"}
         "401": {$ref: "#/components/responses/Unauthorized"}
@@ -259,7 +259,7 @@ paths:
             application/json:
               schema: {type: array, items: {$ref: "#/components/schemas/Student"}}
               example:
-                - Class: B
+                - Class: J
                   Id: 922
                   Name: Any Student
         "401": {$ref: "#/components/responses/Unauthorized"}
@@ -280,7 +280,7 @@ paths:
             application/json:
               schema: {type: array, items: {$ref: "#/components/schemas/Student"}}
               example:
-                - Class: B
+                - Class: J
                   Id: 922
                   Name: Any Student
         "401": {$ref: "#/components/responses/Unauthorized"}

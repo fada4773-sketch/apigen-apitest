@@ -20,7 +20,7 @@ each with its PUT and DELETE, and a POST on `/book` and `/student`? This directo
 | `openapi.original.yaml` | the spec as written by hand: conflicting paths, no examples |
 | `openapi.yaml` | the same spec after `apitest-gen apply` (examples, links, extensions) |
 | `openapi.fixed.yaml` | the fixed spec: class operations at `/book/class/{class}` and `/student/class/{class}`, after `apply` |
-| `defaults.json` | written by `review` (the 12 bindings) plus three decisions by hand (see [Findings](#findings)) |
+| `defaults.json` | written by `review` (the 12 bindings) plus six extension entries by hand (see [Findings](#findings) 6 to 8) |
 | `global-dict.json` | the dictionary written by `apply` |
 | `server/server.go` | in-memory API. `New()` serves only `/book/{id}` (a Go `ServeMux` panics if both templates are registered); `NewFixed()` also serves `/…/class/{class}` |
 | `api_test.go` | `TestFixed`: the fixed spec against `NewFixed()` |
@@ -330,37 +330,25 @@ review: 20 suggestions; 12 defaults proposed, 0 values to choose, 0 defaults to 
   APPLY    paths./student.post.requestBody: required body without example: no value for /Class
   APPLY    paths./student/{class}.put.requestBody: required body without example: no value for /Class
   APPLY    paths./student/{id}.put.requestBody: required body without example: no value for /Class
-defaults.json updated: 12 entries added, 0 of them null (fill in a value); see "$review" at the top of the file
-next: check defaults.json, then run: apitest-gen -spec openapi.yaml
+defaults.json: 12 entries added; check them, change or delete what is wrong, then run: apitest-gen -spec openapi.yaml
 ```
 
-`defaults.json` did not exist; `review` created it with the 12 bindings and a `$review` block at the top:
+`defaults.json` did not exist; `review` created it with the 12 bindings, as plain data:
 
 ```json
 {
-  "$review": {
-    "about": "Written by apitest-gen review, replaced on every run. …",
-    "added": {
-      "getBookByClass.class": "Guessed by apitest from the names: createBook returns body /Class. Keep it if that is the class getBookByClass needs",
-      "getBookById.id": "Guessed by apitest from the names: createBook returns body /Id. Keep it if that is the id getBookById needs",
-      …
-    },
-    "apply fixes": [
-      "paths./book.post.requestBody: required body without example: no value for /Class",
-      …
-    ],
-    "change the spec": [
-      "paths./book/{class}: path \"/book/{class}\" conflicts with \"/book/{id}\" (same template); servers cannot route both. Rename one of the paths or merge the operations; …",
-      "paths./student/{class}: …"
-    ]
-  },
   "getBookByClass.class": { "bind": "createBook", "pointer": "/Class" },
+  "updateBookClass.class": { "bind": "createBook", "pointer": "/Class" },
+  "deleteBookClass.class": { "bind": "createBook", "pointer": "/Class" },
+  "getBookById.id": { "bind": "createBook", "pointer": "/Id" },
   …
   "deleteStudent.id": { "bind": "createStudent", "pointer": "/Id" }
 }
 ```
 
-**Review:** the server returns `Id` and `Class` from the POST, so all 12 bindings are right and stay. The `apply fixes` entries need nothing. The conflict under `change the spec` is the point of this example; it is fixed in step 6.
+The reasons, the missing body examples and the conflict are only printed (with `-v` one reason per entry).
+
+**Review:** the server returns `Id` and `Class` from the POST, so all 12 bindings are right and stay. The missing body examples need nothing, `apply` writes them. The conflict (`SPEC`) is the point of this example; it is fixed in step 6.
 
 Three more decisions were added by hand after the first test of the fixed spec (see [Findings](#findings) 6 to 8), at the end of `defaults.json`:
 
@@ -413,12 +401,11 @@ apitest-gen check -spec openapi.yaml
 review: 2 suggestions; 0 defaults proposed, 0 values to choose, 0 defaults to correct, 0 fixed by apply, 2 to fix in the spec
   SPEC     paths./book/{class}: path "/book/{class}" conflicts with "/book/{id}" (same template); servers cannot route both
   SPEC     paths./student/{class}: path "/student/{class}" conflicts with "/student/{id}" (same template); servers cannot route both
-defaults.json updated: nothing added; "$review" at the top of the file lists what is still open
-next: check defaults.json, then run: apitest-gen -spec openapi.yaml
+defaults.json: nothing added
 check: 42 of 42 cases can be sent, 0 problems
 ```
 
-Everything can be sent now. Only the conflict is left in `$review`, and it needs a change of the spec.
+Everything can be sent now. Only the conflict is left, and it needs a change of the spec.
 
 ### 5. apitest against the conflicting spec
 
@@ -460,12 +447,12 @@ dictionary global-dict.json updated: 4 DTOs, 8 fields, 2 parameters; values: 0 n
 spec openapi.fixed.yaml: 20 examples added, 0 replaced, 0 with defaults, 0 kept, 0 incomplete; 6 extensions, 12 bindings; 0 dictionary values from defaults
 review: 0 suggestions; 0 defaults proposed, 0 values to choose, 0 defaults to correct, 0 fixed by apply, 0 to fix in the spec
 nothing to review
-defaults.json updated: nothing is open, the "$review" block was removed
+defaults.json: nothing added
 check: 42 of 42 cases can be sent, 0 problems
 ok  	github.com/fada4773-sketch/apigen-apitest/examples/path-conflict
 ```
 
-The same `defaults.json` serves both specs: the operationIds did not change. Nothing is left to review, so the `$review` block is removed, and **all 42 cases pass** (report: `apitest-report/fixed.md`, no spec findings).
+The same `defaults.json` serves both specs: the operationIds did not change. Nothing is left to review, and **all 42 cases pass** (report: `apitest-report/fixed.md`, no spec findings).
 
 ## Findings
 

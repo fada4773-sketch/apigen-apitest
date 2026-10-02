@@ -66,15 +66,23 @@ contain breaking changes, which are listed here.
 - `apitest-gen review` evaluates what apitest and apitest-gen would report
   (spec findings such as heuristic bindings, missing 401/403, invalid
   examples and links, cases that cannot be sent, values the generator
-  cannot create, wrong or unused defaults) and proposes a fix for each:
-  defaults entries with their value (`DEFAULT`), keys whose value only the
-  user knows (`CHOOSE`, written as `null`), corrections of the defaults
-  (`EDIT`), and what `apply` or a spec change solves. The proposals are
-  added to `defaults.json` (created if missing) with a `$review` block that
-  explains them; the next `apitest-gen` run takes them into dictionary and
-  spec. Keys in `$rejected` are not proposed again.
+  cannot create, wrong or unused defaults) and writes the fixes as data
+  into `defaults.json` (created if missing): the bindings apitest guesses,
+  bindings to list GETs where no POST creates the resource
+  (`{"bind": "GetBooks", "pointer": "/0/Id"}`), and the ids used so far.
+  No comments are written; the reasons are printed. The next
+  `apitest-gen` run takes the entries into dictionary and spec. Keys in
+  `$rejected` are not proposed again.
 - `defaults.json`: `null` marks a value still to be filled in
   (`DEFAULT_TODO`); `apply` creates an empty defaults file if it is missing.
+- Response examples follow the path: `GET /Book/id/{id}` with id 100
+  returns `Id: 100`, the Articles under `/Book/id/{id}/Article` get
+  `BookId: 100`; a path value from the defaults is also kept in the DTO
+  field of the dictionary.
+- A path default for a generic id that cannot be written, because the
+  parameter object is shared by several paths, is reported as
+  `SHARED_PARAM_CONFLICT` instead of `DEFAULT_UNUSED`; for a bound
+  parameter it is not needed and only noted with `-v`.
 - `review` lists a missing body example once per operation, not once per
   case.
 - New `links` are written in block style, one link per line, instead of
