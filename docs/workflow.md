@@ -7,6 +7,50 @@ This guide walks through one fictional project from start to finish: the **Starp
 
 Every flag and every key used here is described in [configuration.md](configuration.md#13-apitest-gen). The outputs shown are illustrative; your numbers depend on your spec.
 
+## Quick reference: review the suggestions and take them into the defaults
+
+```sh
+# 1. propose fixes for everything apitest would report; writes defaults.suggested.json, changes nothing
+apitest-gen review -spec openapi.yaml -dict global-dict.json -defaults defaults.json -v
+
+# 2. review defaults.suggested.json in the editor (rules below): delete every active entry you reject,
+#    add the "$choose …" keys with real values
+
+# 3. optional: show what apply would change with the proposals; writes nothing
+apitest-gen -spec openapi.yaml -dict global-dict.json -defaults defaults.json,defaults.suggested.json -dry-run -v
+
+# 4. keep them: copy the active entries (all keys without "$") into defaults.json
+jq -s '.[0] + (.[1] | with_entries(select(.key | startswith("$") | not)))' defaults.json defaults.suggested.json > defaults.new.json
+mv defaults.new.json defaults.json
+rm defaults.suggested.json
+
+# 5. write them into the spec: bindings become x-apitest-bind or links, extensions are set
+apitest-gen -spec openapi.yaml -dict global-dict.json -defaults defaults.json -check
+
+# 6. confirm: nothing left, or only what needs a change of the spec
+apitest-gen review -spec openapi.yaml -dict global-dict.json -defaults defaults.json
+```
+
+- **There is no accept flag.** `review` never writes into `defaults.json`. The file you reviewed is the decision. Step 4 copies it, and `apply` (step 5) takes it into the spec.
+- **`-defaults a.json,b.json`** reads both files, and later files win. That is enough to try or use the proposals (step 3), but they stay in a file you will overwrite with the next `review`. Keep accepted entries in `defaults.json`.
+- **jq needs an existing `defaults.json`.** On the first run, create one first: `echo '{}' > defaults.json`.
+- **Without jq,** copy the active entries by hand: every key without `$` in front, with its value.
+
+**Review rules:**
+
+| Entry | Check | Accept | Reject |
+|---|---|---|---|
+| `DEFAULT` binding `{"bind": "<producer>", "pointer": "/X"}` | Does the producer really return the value the consumer needs? Is `/X` the field the path parameter means, and is the producer the right resource? The guess comes from names. | keep the entry | delete it. Better: replace it with the right binding, or the parameter stays heuristic. |
+| `DEFAULT` `"<op>.x-apitest-forbidden": false` | Should the forbidden case run? | keep, if not | delete it and document 403 in the spec |
+| `$choose <key>` | Which value exists in the target environment? | add `"<key>": <value>`. Put environment values in a per-environment file, or use a source `{"from": "GET …", "pick": "…"}`. | leave it; the case stays without a value |
+| `$edit` | Is the key misspelled, or does it name a DTO? | correct the entry in `defaults.json` | – |
+| `$apply` | – | nothing to decide; step 5 fixes it | – |
+| `$spec` | What does the API really do? | change the spec as the entry says, e.g. add a 401 or rename a path | – |
+
+- **Never accept a binding unseen.** A wrong binding fails in a way that is hard to see: the case gets a value, just the wrong one.
+- **Values that must exist** (ids, codes, seed data) come from you or from a source, never from the generator.
+- **Run `review` again after every change.** Keys already in `defaults.json` are not proposed again, so a second run shows what is still open.
+
 ## Contents
 
 1. [The project](#1-the-project)
