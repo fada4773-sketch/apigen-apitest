@@ -67,12 +67,12 @@ contain breaking changes, which are listed here.
   (spec findings such as heuristic bindings, missing 401/403, invalid
   examples and links, cases that cannot be sent, values the generator
   cannot create, wrong or unused defaults) and writes the fixes as data
-  into `defaults.json` (created if missing): the bindings apitest guesses,
-  bindings to list GETs where no POST creates the resource
-  (`{"bind": "GetBooks", "pointer": "/0/Id"}`), and the ids used so far.
-  No comments are written; the reasons are printed. The next
-  `apitest-gen` run takes the entries into dictionary and spec. Keys in
-  `$rejected` are not proposed again.
+  into `defaults.json` (created if missing): values, the ids used so far
+  and `$snapshot`. It prints the resource model and proposes no bindings:
+  the examples follow the bindings apitest finds by itself. No comments
+  are written; the reasons are printed. The next `apitest-gen` run takes
+  the entries into dictionary and spec. Keys in `$rejected` are not
+  proposed again.
 - `defaults.json`: `null` marks a value still to be filled in
   (`DEFAULT_TODO`); `apply` creates an empty defaults file if it is missing.
 - `apitest-gen` (apply) verifies before it saves: the new spec is written
@@ -83,17 +83,35 @@ contain breaking changes, which are listed here.
   is written, the problems are listed and the exit code is 1.
   `DEFAULT_UNUSED`, `SHARED_PARAM_CONFLICT` and `BIND_NOT_WRITTEN` now stop
   the run.
-- A parameter bound in `defaults.json` takes its example from the
-  producer's example at the pointer (`GetBooks` `/0/Id` = 550 → `id: 550`),
-  so parameter, list and response examples agree.
-- Response examples follow the path: `GET /Book/id/{id}` with id 100
-  returns `Id: 100`, the Articles under `/Book/id/{id}/Article` get
-  `BookId: 100`; a path value from the defaults is also kept in the DTO
-  field of the dictionary.
-- A path default for a generic id that cannot be written, because the
-  parameter object is shared by several paths, is reported as
-  `SHARED_PARAM_CONFLICT` instead of `DEFAULT_UNUSED`; for a bound
-  parameter it is not needed and only noted with `-v`.
+- Examples follow the data through the run. `apitest-gen` detects the
+  resources of the spec (`BookRead`, `BookUpdate` → `Book`, keys from the
+  path parameters, lists, reads, creates, updates, deletes, `Article`
+  below `Book`) and gives each resource records: fetched from a running
+  instance with `-base-url` (GET only; `"$snapshot": {"Book": {"from":
+  "GetBooks", "count": 3}}`), or generated and kept in
+  `global-dict.json` (`records`). The cases are played in the order
+  apitest runs them, with the Config from `"$apitest"` (`MethodOrder`,
+  `DeleteLast`, `Tags`, …). An update sends new values and changes the
+  record; every path parameter, body, response and list example shows the
+  record as it is at its case, so a GET after a PUT expects what the PUT
+  sent. Lists with their own key parameter show only matching records,
+  records created by a POST are followed through the bindings apitest
+  uses, `Response.Id` is the key, and a `Message` field reads
+  `Successfully updated Book` or `Error while updating Book`. Key defaults
+  select the record (`"/Book/id/{id}": 8`), keys fit the patterns of their
+  path parameters, and a parameter object shared by paths of different
+  records is copied into the path (`PARAM_INLINED`). `"$model"` corrects
+  the model. No links and no extensions are written for this.
+- `verify` also plays the cases of the written spec, built and ordered by
+  apitest's own code, on the start records and checks every example
+  (`EXAMPLE_STALE`, `PARAM_NO_RECORD`); a snapshot that fails, is short or
+  disagrees with itself stops the run too. Nothing is written then.
+- Removed: bound parameters taking the producer's example and response
+  examples following the path inside `apply`; the records do both,
+  consistently.
+- A path default for a parameter object shared by several paths selects
+  the record when the parameter holds a record key; otherwise it is
+  reported as `SHARED_PARAM_CONFLICT`.
 - `review` lists a missing body example once per operation, not once per
   case.
 - New `links` are written in block style, one link per line, instead of

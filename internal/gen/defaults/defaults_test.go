@@ -167,3 +167,64 @@ func TestUpdate(t *testing.T) {
 		t.Errorf("new file: %q", got)
 	}
 }
+
+func TestSpecialKeys(t *testing.T) {
+	d, err := Parse([]byte(`{
+  "$snapshot": {"Book": {"from": "GetBooks", "count": 3}, "Ship": {"from": "GetShips"}},
+  "$model": {"Book": {"keys": ["Code"]}},
+  "$apitest": {"MethodOrder": ["POST", "PUT", "GET", "DELETE"], "DeleteLast": true, "IgnoreFields": ["Message"]},
+  "Name": "x"
+}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s, ok := d.SnapshotFor("book"); !ok || s.From != "GetBooks" || s.Records() != 3 {
+		t.Errorf("snapshot: %+v %v", s, ok)
+	}
+	if s, _ := d.SnapshotFor("Ship"); s.Records() != 1 {
+		t.Errorf("default count: %d", s.Records())
+	}
+	if d.Model["Book"].Keys[0] != "Code" || !d.RunConfig().DeleteLast || d.RunConfig().IgnoreFields[0] != "Message" {
+		t.Errorf("model %v, run %+v", d.Model, d.RunConfig())
+	}
+	if d.Len() != 1 {
+		t.Errorf("the special keys are entries: %v", d.Keys())
+	}
+	if (&Defaults{}).RunConfig().DeleteLast {
+		t.Error("RunConfig without $apitest")
+	}
+
+	for in, want := range map[string]string{
+		`{"$apitest": {"MethodOrder": ["DELETE", "GET"]}}`:           "DELETE must be the last",
+		`{"$apitest": {"MethodOrder": ["GET", "get"]}}`:              "twice",
+		`{"$apitest": {"MethodOrder": ["FETCH"]}}`:                   "unknown method",
+		`{"$apitest": {"DeleteFirst": true}}`:                        "MethodOrder, DeleteLast",
+		`{"$snapshot": {"Book": {"from": "GetBooks", "count": -1}}}`: "1 or more",
+		`{"$snapshot": {"Book": "GetBooks"}}`:                        `"from"`,
+		`{"$model": {"Book": {"key": ["Id"]}}}`:                      `"keys"`,
+	} {
+		if _, err := Parse([]byte(in)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v, want %q", in, err, want)
+		}
+	}
+}
+
+func TestSpecialKeysMerge(t *testing.T) {
+	dir := t.TempDir()
+	a, b := filepath.Join(dir, "a.json"), filepath.Join(dir, "b.json")
+	_ = os.WriteFile(a, []byte(`{"$snapshot": {"Book": {"from": "GetBooks"}, "Ship": {"from": "GetShips"}}, "$apitest": {"DeleteLast": true}}`), 0o600)
+	_ = os.WriteFile(b, []byte(`{"$snapshot": {"Book": {"from": "ListBooks", "count": 2}}, "$model": {"Book": {"keys": ["Code"]}}, "$apitest": {"MethodOrder": ["PUT"]}}`), 0o600)
+	d, err := LoadAll(a + "," + b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := d.SnapshotFor("Book"); s.From != "ListBooks" || s.Count != 2 {
+		t.Errorf("Book: %+v", s)
+	}
+	if _, ok := d.SnapshotFor("Ship"); !ok || d.Model["Book"].Keys[0] != "Code" {
+		t.Errorf("merge lost entries: %v %v", d.Snapshot, d.Model)
+	}
+	if r := d.RunConfig(); r.DeleteLast || r.MethodOrder[0] != "PUT" {
+		t.Errorf("$apitest of the later file replaces the earlier one: %+v", r)
+	}
+}

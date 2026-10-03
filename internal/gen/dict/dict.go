@@ -30,6 +30,9 @@ type Dict struct {
 	// keyed by path ("/apps/{id}"), because one value per parameter name
 	// would give every resource the same id.
 	Paths map[string]any `json:"paths,omitempty"`
+	// Records are the records the examples of each resource show, as the
+	// test database starts with them (apitest-gen writes them on every run).
+	Records map[string][]map[string]any `json:"records,omitempty"`
 }
 
 // Node describes a DTO, a field or a parameter. Constraints come from the

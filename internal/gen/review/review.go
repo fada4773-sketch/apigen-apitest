@@ -22,6 +22,7 @@ import (
 	"github.com/fada4773-sketch/apigen-apitest/internal/gen/apply"
 	"github.com/fada4773-sketch/apigen-apitest/internal/gen/defaults"
 	"github.com/fada4773-sketch/apigen-apitest/internal/gen/dict"
+	"github.com/fada4773-sketch/apigen-apitest/internal/gen/model"
 	"github.com/fada4773-sketch/apigen-apitest/internal/params"
 	"github.com/fada4773-sketch/apigen-apitest/internal/spec"
 )
@@ -72,6 +73,9 @@ type Input struct {
 	// Apply is the result of "apply" run in memory on the same input; its
 	// problems are reviewed too.
 	Apply *apply.Result
+	// Model is the resource model; path parameters that hold a record key
+	// get their example from the records, so they need no default.
+	Model *model.Model
 }
 
 type reviewer struct {
@@ -83,15 +87,12 @@ type reviewer struct {
 	// chosen are parameters ("query.zone") that already have a CHOOSE
 	// entry from a case that cannot be sent
 	chosen map[string]bool
-	// listBound are the bindings proposed from list GETs, by
-	// "<operationId>.<param>", with their producer
-	listBound map[string]*spec.Operation
-	set       *bind.Set // the bindings in the spec, nil if they are invalid
+	set    *bind.Set // the bindings in the spec, nil if they are invalid
 }
 
 // Run reviews a spec.
 func Run(in Input) *Result {
-	r := &reviewer{in: in, res: &Result{}, known: map[string]bool{}, todo: map[string]bool{}, seen: map[string]bool{}, chosen: map[string]bool{}, listBound: map[string]*spec.Operation{}}
+	r := &reviewer{in: in, res: &Result{}, known: map[string]bool{}, todo: map[string]bool{}, seen: map[string]bool{}, chosen: map[string]bool{}}
 	for _, k := range in.Defaults.Keys() {
 		if in.Defaults.IsTodo(k) {
 			r.todo[strings.ToLower(k)] = true
@@ -111,7 +112,6 @@ func Run(in Input) *Result {
 	} else {
 		r.set = set
 		r.bindings(set)
-		r.listBindings(set)
 	}
 	r.auth()
 	if set != nil {
@@ -120,7 +120,47 @@ func Run(in Input) *Result {
 	}
 	r.dictNotes()
 	r.applyProblems()
+	r.snapshot()
 	return r.res
+}
+
+// modeled reports whether a path parameter of op holds a record key: the
+// records give it its example.
+func (r *reviewer) modeled(op *spec.Operation, name string) bool {
+	o := r.in.Model.Op(op)
+	return o != nil && o.Param(name) != nil
+}
+
+// snapshot proposes "$snapshot" with the list each resource is fetched
+// from, if the defaults have none yet.
+func (r *reviewer) snapshot() {
+	if r.in.Model == nil || len(r.in.Defaults.Snapshot) > 0 {
+		return
+	}
+	v := map[string]any{}
+	var names []string
+	for _, res := range r.in.Model.Resources {
+		var best *model.Op
+		for _, o := range res.OpsWith(model.RoleList) {
+			own := false
+			for _, p := range o.Params {
+				own = own || p.Resource == res
+			}
+			if !own && o.Op.HasOperationID && (best == nil || len(o.Params) < len(best.Params)) {
+				best = o
+			}
+		}
+		if best != nil {
+			v[res.Name] = map[string]any{"from": best.Op.ID, "count": 1}
+			names = append(names, res.Name)
+		}
+	}
+	if len(v) == 0 {
+		return
+	}
+	r.add(Suggestion{Action: ActionDefault, Finding: "SNAPSHOT_SOURCE", Where: "model", Key: defaults.SnapshotKey, Value: v,
+		Message: fmt.Sprintf("the records of %s are fetched from these lists with -base-url", strings.Join(names, ", ")),
+		Fix:     "with apitest-gen -base-url <instance> the examples get the data of the running instance; raise \"count\" to show more elements in the list examples"})
 }
 
 // add records a suggestion once. Keys the defaults already have, or that
@@ -168,40 +208,10 @@ func (r *reviewer) specFindings() {
 
 var quoted = regexp.MustCompile(`"([^"]*)"`)
 
+// bindings reviews the links of the spec. Heuristic bindings need no
+// entry: the generator gives the examples the values the heuristic takes.
 func (r *reviewer) bindings(set *bind.Set) {
 	s := r.in.Spec
-	for _, op := range s.Ops {
-		for _, p := range op.Params {
-			b := set.For(op, p)
-			if b == nil || b.Kind != bind.Heuristic {
-				continue
-			}
-			where := fmt.Sprintf("%s.parameters[%s]", op.Where, p.Name)
-			msg := fmt.Sprintf("parameter %q is resolved heuristically from %s (%s)", p.Name, b.Producer.ID, b.Source)
-			if !op.HasOperationID || !b.Producer.HasOperationID {
-				r.add(Suggestion{Action: ActionSpec, Finding: spec.FindingHeuristic, Where: where, Message: msg,
-					Fix: "give both operations an operationId; then apitest-gen review can propose the binding"})
-				continue
-			}
-			v := map[string]any{"bind": b.Producer.ID}
-			switch {
-			case b.Source.HasConst:
-				r.add(Suggestion{Action: ActionDefault, Finding: spec.FindingHeuristic, Where: where, Message: msg,
-					Key: op.ID + "." + p.Name, Value: b.Source.Const, Fix: "the link sets a constant; keep it as a fixed value"})
-				continue
-			case b.Source.Header != "":
-				v["header"] = b.Source.Header
-			default:
-				v["pointer"] = b.Source.Pointer
-				if b.Source.FromRequest {
-					v["request"] = true
-				}
-			}
-			r.add(Suggestion{Action: ActionDefault, Finding: spec.FindingHeuristic, Where: where, Message: msg,
-				Key: op.ID + "." + p.Name, Value: v,
-				Fix: fmt.Sprintf("guessed by apitest from the names: %s returns %s. Keep it if that is the %s %s needs", b.Producer.ID, b.Source, p.Name, op.ID)})
-		}
-	}
 	for _, f := range set.Findings {
 		if f.Kind != spec.FindingBinding {
 			continue
@@ -220,205 +230,6 @@ func (r *reviewer) bindings(set *bind.Set) {
 		r.add(Suggestion{Action: ActionSpec, Finding: f.Kind, Where: f.Where, Message: f.Message, Fix: fix})
 	}
 }
-
-// listBindings proposes bindings from list GETs for path parameters that
-// have no binding: /Book/id/{id} takes the Id of the first element of
-// GET /Book, /Book/{Code}/Article/id/{id} the Id of the first Article of a
-// list of Articles. This is how test data are found in an environment
-// that already has them, and the only way where no POST creates them.
-func (r *reviewer) listBindings(set *bind.Set) {
-	s := r.in.Spec
-	for _, op := range s.Ops {
-		if !op.HasOperationID {
-			continue
-		}
-		for _, p := range op.Params {
-			where := fmt.Sprintf("%s.parameters[%s]", op.Where, p.Name)
-			if p.In != openapi3.ParameterInPath || set.For(op, p) != nil || (r.decided(op, p) && !r.sharedConflict(where)) {
-				continue
-			}
-			resource := resourceOf(op.Path, p.Name)
-			if resource == "" {
-				continue
-			}
-			producer, field := r.listProducer(op, p, resource, set)
-			if producer == nil {
-				continue
-			}
-			key := op.ID + "." + p.Name
-			r.listBound[key] = producer
-			r.add(Suggestion{Action: ActionDefault, Finding: "LIST_BINDING", Where: where,
-				Message: fmt.Sprintf("parameter %q has no producer; %s lists %s with %s", p.Name, producer.ID, resource, field),
-				Key:     key, Value: map[string]any{"bind": producer.ID, "pointer": "/0/" + field},
-				Fix: fmt.Sprintf("takes the %s of the first element %s returns at run time, so the test uses data that exist", field, producer.ID)})
-		}
-	}
-}
-
-// sharedConflict reports whether apply could not write the default of a
-// shared parameter at where; such a default has no effect.
-func (r *reviewer) sharedConflict(where string) bool {
-	if r.in.Apply == nil {
-		return false
-	}
-	for _, n := range r.in.Apply.Notes {
-		if n.Code == apply.CodeSharedParam && n.Where == where {
-			return true
-		}
-	}
-	return false
-}
-
-// decided reports whether the defaults already set a value for p of op.
-func (r *reviewer) decided(op *spec.Operation, p *openapi3.Parameter) bool {
-	keys := []string{op.ID + "." + p.Name, p.Name}
-	if r.generic(p.Name) {
-		keys = apply.GenericIDKeys(op, p)
-	}
-	return slices.ContainsFunc(keys, func(k string) bool { return r.known[strings.ToLower(k)] })
-}
-
-// listProducer finds a GET that returns a list of resource whose elements
-// have the field p stands for. The one with the fewest path parameters
-// wins; a producer that depends on op is never used.
-func (r *reviewer) listProducer(op *spec.Operation, p *openapi3.Parameter, resource string, set *bind.Set) (*spec.Operation, string) {
-	var best *spec.Operation
-	bestField := ""
-	for _, cand := range r.in.Spec.Ops {
-		if cand == op || cand.Method != "GET" || !cand.HasOperationID {
-			continue
-		}
-		last := lastLiteral(cand.Path)
-		if last == "" || !sameResource(last, resource) {
-			continue
-		}
-		props := listItemProps(cand)
-		field := fieldFor(props, p.Name, resource, r.generic(p.Name))
-		if field == "" || r.dependsOn(cand, op, set, 0) {
-			continue
-		}
-		if best == nil || countParams(cand) < countParams(best) || (countParams(cand) == countParams(best) && cand.Path < best.Path) {
-			best, bestField = cand, field
-		}
-	}
-	return best, bestField
-}
-
-// dependsOn reports whether a takes a parameter from b, directly or through
-// other bindings, existing or proposed.
-func (r *reviewer) dependsOn(a, b *spec.Operation, set *bind.Set, depth int) bool {
-	if a == b {
-		return true
-	}
-	if depth > 20 {
-		return false
-	}
-	for _, p := range a.Params {
-		var producer *spec.Operation
-		if bd := set.For(a, p); bd != nil {
-			producer = bd.Producer
-		} else {
-			producer = r.listBound[a.ID+"."+p.Name]
-		}
-		if producer != nil && r.dependsOn(producer, b, set, depth+1) {
-			return true
-		}
-	}
-	return false
-}
-
-// resourceOf is the resource a path parameter identifies: the literal
-// segment in front of it, skipping a literal "id": /Book/id/{id} → Book.
-func resourceOf(path, param string) string {
-	segs := strings.Split(strings.Trim(path, "/"), "/")
-	i := slices.Index(segs, "{"+param+"}")
-	j := i - 1
-	if j >= 0 && strings.EqualFold(segs[j], "id") {
-		j--
-	}
-	if i < 0 || j < 0 || strings.HasPrefix(segs[j], "{") {
-		return ""
-	}
-	return segs[j]
-}
-
-func lastLiteral(path string) string {
-	segs := strings.Split(strings.Trim(path, "/"), "/")
-	if last := segs[len(segs)-1]; last != "" && !strings.HasPrefix(last, "{") {
-		return last
-	}
-	return ""
-}
-
-func sameResource(a, b string) bool { return strings.EqualFold(singular(a), singular(b)) }
-
-func singular(w string) string {
-	l := strings.ToLower(w)
-	switch {
-	case strings.HasSuffix(l, "ies"):
-		return l[:len(l)-3] + "y"
-	case strings.HasSuffix(l, "ses"), strings.HasSuffix(l, "xes"):
-		return l[:len(l)-2]
-	case strings.HasSuffix(l, "s") && !strings.HasSuffix(l, "ss"):
-		return l[:len(l)-1]
-	}
-	return l
-}
-
-// listItemProps returns the properties of the elements of the lowest 2xx
-// JSON response, if it is a list.
-func listItemProps(op *spec.Operation) openapi3.Schemas {
-	if op.Op.Responses == nil {
-		return nil
-	}
-	var codes []string
-	for code := range op.Op.Responses.Map() {
-		if len(code) == 3 && code[0] == '2' {
-			codes = append(codes, code)
-		}
-	}
-	slices.Sort(codes)
-	for _, code := range codes {
-		resp := op.Op.Responses.Map()[code].Value
-		if resp == nil {
-			continue
-		}
-		for mt, m := range resp.Content {
-			if !spec.IsJSON(mt) || m.Schema == nil || m.Schema.Value == nil {
-				continue
-			}
-			if s := m.Schema.Value; s.Items != nil && s.Items.Value != nil {
-				props, _ := dict.Properties(s.Items.Value)
-				return props
-			}
-		}
-		return nil
-	}
-	return nil
-}
-
-// fieldFor finds the field of a list element that a path parameter stands
-// for: the same name, the name without the resource ("bookId" → "Id"), or
-// "Id" for a generic id.
-func fieldFor(props openapi3.Schemas, param, resource string, generic bool) string {
-	names := []string{param}
-	if generic {
-		names = append(names, "id")
-	}
-	if len(param) > len(resource) && strings.EqualFold(param[:len(resource)], resource) {
-		names = append(names, param[len(resource):])
-	}
-	for _, n := range names {
-		for k := range props {
-			if strings.EqualFold(k, n) {
-				return k
-			}
-		}
-	}
-	return ""
-}
-
-func countParams(op *spec.Operation) int { return strings.Count(op.Path, "{") }
 
 func (r *reviewer) auth() {
 	for _, f := range cases.AuthFindings(r.in.Spec) {
@@ -463,7 +274,7 @@ func (r *reviewer) notBuildable(set *bind.Set) {
 		}
 		in := params.Inputs{Fixed: fixed, OpID: c.Op.ID, CaseName: c.ParamSource(),
 			Binding: func(p *openapi3.Parameter) (any, bool) {
-				return "bound", set.For(c.Op, p) != nil || r.listBound[c.Op.ID+"."+p.Name] != nil
+				return "bound", set.For(c.Op, p) != nil || (p.In == openapi3.ParameterInPath && r.modeled(c.Op, p.Name))
 			}}
 		_, err := exec.Prepare(c, exec.Input{Base: "http://localhost", Params: in,
 			Auth: exec.ResolveAuth(c.Op.Security, schemes), Token: "token"})
@@ -520,8 +331,8 @@ func (r *reviewer) genericIDs(set *bind.Set) {
 			if p.In != openapi3.ParameterInPath || !r.generic(p.Name) {
 				continue
 			}
-			if set.For(op, p) != nil || r.listBound[op.ID+"."+p.Name] != nil {
-				continue // apitest takes the id from a producer at run time
+			if set.For(op, p) != nil || r.modeled(op, p.Name) {
+				continue // a producer or a record provides the id
 			}
 			keys := apply.GenericIDKeys(op, p)
 			if slices.ContainsFunc(keys, func(k string) bool { return r.known[strings.ToLower(k)] }) {
@@ -608,15 +419,15 @@ func (r *reviewer) applyProblems() {
 }
 
 // boundAt reports whether the parameter at where
-// ("paths./x/{id}.get.parameters[id]") is bound, in the spec or by a
-// proposed list binding.
+// ("paths./x/{id}.get.parameters[id]") is bound in the spec or holds a
+// record key.
 func (r *reviewer) boundAt(where string) bool {
 	for _, op := range r.in.Spec.Ops {
 		for _, p := range op.Params {
 			if fmt.Sprintf("%s.parameters[%s]", op.Where, p.Name) != where {
 				continue
 			}
-			if r.listBound[op.ID+"."+p.Name] != nil || (r.set != nil && r.set.For(op, p) != nil) {
+			if r.modeled(op, p.Name) || (r.set != nil && r.set.For(op, p) != nil) {
 				return true
 			}
 		}

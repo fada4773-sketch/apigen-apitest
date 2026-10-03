@@ -54,6 +54,10 @@ type Options struct {
 	// GenericIDs are path parameter names that mean another resource on
 	// every path, by default id, uuid and key.
 	GenericIDs []string
+	// RecordKey reports whether a path parameter holds the key of a record
+	// (internal/gen/scenario). Its defaults select the record, which gives
+	// every path its value, so a shared parameter object is no conflict.
+	RecordKey func(op *spec.Operation, param string) bool
 }
 
 // Note is one message.
@@ -86,7 +90,7 @@ func Apply(doc *yamldoc.Doc, s *spec.Spec, d *dict.Dict, defs *defaults.Defaults
 		opt.GenericIDs = []string{"id", "uuid", "key"}
 	}
 	a := &applier{doc: doc, s: s, d: d, defs: defs, opt: opt, v: spec.NewValidator(),
-		res: &Result{}, written: map[*yaml.Node]bool{}, fatalSeen: map[string]bool{}, paramDefault: map[*yaml.Node]bool{}}
+		res: &Result{}, written: map[*yaml.Node]bool{}, fatalSeen: map[string]bool{}}
 	for _, op := range s.Ops {
 		a.operation(op)
 	}
@@ -117,20 +121,7 @@ func (a *applier) dtoName(key string) string {
 	return ""
 }
 
-// paramValue is the example of a path parameter and whether it came from
-// the defaults.
-type paramValue struct {
-	v           any
-	fromDefault bool
-}
-
 type applier struct {
-	// pathVals are the path parameter examples of the current operation;
-	// paramDefault marks parameter nodes whose example came from defaults
-	pathVals     map[string]paramValue
-	paramDefault map[*yaml.Node]bool
-	genericDef   bool // the last genericID value came from the defaults
-
 	doc       *yamldoc.Doc
 	s         *spec.Spec
 	d         *dict.Dict
@@ -170,7 +161,6 @@ func (a *applier) operation(op *spec.Operation) {
 	}
 	where := fmt.Sprintf("paths.%s.%s", op.Path, strings.ToLower(op.Method))
 	item := a.s.Doc.Paths.Value(op.Path)
-	a.pathVals = map[string]paramValue{}
 
 	// parameters: operation level overrides path level with the same in+name
 	own := map[string]bool{}
@@ -261,17 +251,19 @@ func (a *applier) parameters(op *spec.Operation, params openapi3.Parameters, lis
 			scopeOp = ""
 			if e := a.defs.Scoped(opName(op), p.Name); e != nil {
 				a.defs.Use(e) // it matched, the conflict is reported instead
-				a.note(CodeSharedParam, w, fmt.Sprintf("%q needs its own value, but the parameter object is shared with other operations; the shared value is used", e.Key))
+				if a.recordKey(op, p) {
+					a.note(CodeGenericID, w, fmt.Sprintf("%q selects the record; the records give this path its value", e.Key))
+				} else {
+					a.note(CodeSharedParam, w, fmt.Sprintf("%q needs its own value, but the parameter object is shared with other operations; the shared value is used", e.Key))
+				}
 			}
 			if a.written[target] {
 				a.sharedGenericID(op, p, target, w)
-				a.recordPath(p, target)
 				continue
 			}
 		}
 		a.written[target] = true
 		a.parameter(op, p, target, scopeOp, w)
-		a.recordPath(p, target)
 	}
 }
 
@@ -294,6 +286,10 @@ func (a *applier) sharedGenericID(op *spec.Operation, p *openapi3.Parameter, tar
 			a.note(CodeGenericID, where, fmt.Sprintf("%q is not needed: the parameter is bound (%q), apitest takes the value at run time", e.Key, op.ID+"."+p.Name))
 			return
 		}
+		if a.recordKey(op, p) {
+			a.note(CodeGenericID, where, fmt.Sprintf("%q selects the record; the records give this path its value", e.Key))
+			return
+		}
 		current := "none"
 		if ex := yamldoc.Get(target, "example"); ex != nil {
 			if v, err := yamldoc.Decode(ex); err == nil {
@@ -309,23 +305,8 @@ func (a *applier) sharedGenericID(op *spec.Operation, p *openapi3.Parameter, tar
 	}
 }
 
-// recordPath keeps the example of a path parameter for the responses of
-// the operation.
-func (a *applier) recordPath(p *openapi3.Parameter, target *yaml.Node) {
-	if p.In != openapi3.ParameterInPath {
-		return
-	}
-	if ex := yamldoc.Get(target, "example"); ex != nil {
-		if v, err := yamldoc.Decode(ex); err == nil {
-			a.pathVals[p.Name] = paramValue{v, a.paramDefault[target]}
-		}
-	}
-}
-
 func (a *applier) parameter(op *spec.Operation, p *openapi3.Parameter, target *yaml.Node, scopeOp, where string) {
 	s := p.Schema.Value
-	fromDefault := false
-	defer func() { a.paramDefault[target] = fromDefault }()
 	var existing any
 	if ex := yamldoc.Get(target, "example"); ex != nil {
 		existing, _ = yamldoc.Decode(ex)
@@ -335,16 +316,12 @@ func (a *applier) parameter(op *spec.Operation, p *openapi3.Parameter, target *y
 	switch {
 	case a.isGeneric(p):
 		v = a.genericID(op, p, scopeOp, where)
-		fromDefault = v != nil && a.genericDef
 	default:
 		if e := a.defs.Field("", scopeOp, p.Name); e != nil {
 			v = a.useDefault(e, s, spec.ModePlain, where)
-			fromDefault = v != nil
 			if v != nil {
 				a.remember(a.d.Parameters[p.In+"."+p.Name], e, v, "parameters."+p.In+"."+p.Name)
 			}
-		} else {
-			v = a.fromProducer(op, p)
 		}
 	}
 	if v == nil && existing != nil && !a.opt.Overwrite && a.valid(s, existing, spec.ModePlain) {
@@ -366,6 +343,10 @@ func (a *applier) parameter(op *spec.Operation, p *openapi3.Parameter, target *y
 	a.write(target, "example", existing, v, where, s, spec.ModePlain)
 }
 
+func (a *applier) recordKey(op *spec.Operation, p *openapi3.Parameter) bool {
+	return a.opt.RecordKey != nil && p.In == openapi3.ParameterInPath && a.opt.RecordKey(op, p.Name)
+}
+
 func (a *applier) isGeneric(p *openapi3.Parameter) bool {
 	return p.In == openapi3.ParameterInPath && slices.ContainsFunc(a.opt.GenericIDs, func(g string) bool { return strings.EqualFold(g, p.Name) })
 }
@@ -376,7 +357,6 @@ func (a *applier) isGeneric(p *openapi3.Parameter) bool {
 // in the dictionary.
 func (a *applier) genericID(op *spec.Operation, p *openapi3.Parameter, scopeOp, where string) any {
 	s := p.Schema.Value
-	a.genericDef = false
 	candidates := []*defaults.Entry{a.defs.Scoped(scopeOp, p.Name), a.defs.Plain(op.Path)}
 	for _, k := range resourceKeys(op.Path, p.Name) {
 		candidates = append(candidates, a.defs.Plain(k))
@@ -388,12 +368,8 @@ func (a *applier) genericID(op *spec.Operation, p *openapi3.Parameter, scopeOp, 
 	for _, e := range candidates {
 		if e != nil {
 			a.note(CodeGenericID, where, fmt.Sprintf("from defaults %q", e.Key))
-			a.genericDef = true
 			return a.useDefault(e, s, spec.ModePlain, where)
 		}
-	}
-	if v := a.fromProducer(op, p); v != nil {
-		return v
 	}
 	if v, ok := a.d.Paths[op.Path]; ok && a.valid(s, v, spec.ModePlain) {
 		return v
@@ -555,11 +531,6 @@ func (a *applier) media(op *spec.Operation, media *openapi3.MediaType, mediaY *y
 	}
 	if existing != nil && !a.opt.Overwrite && a.valid(schema.Value, existing, mode) {
 		nv, changed := a.withDefaults(existing, schema, "", nil, opName(op), mode, where)
-		if !replaceOnly && mode == spec.ModeResponse {
-			var ch bool
-			nv, ch = a.matchPath(op, schema, nv)
-			changed = changed || ch
-		}
 		if changed {
 			a.write(mediaY, "example", existing, nv, where, schema.Value, mode)
 			return
@@ -572,9 +543,6 @@ func (a *applier) media(op *spec.Operation, media *openapi3.MediaType, mediaY *y
 		a.res.Stats.Incomplete++
 		a.note(CodeIncomplete, where, fmt.Sprintf("no example: %s has no value; set it in defaults.json or the dictionary", missing))
 		return
-	}
-	if !replaceOnly && mode == spec.ModeResponse {
-		v, _ = a.matchPath(op, schema, v)
 	}
 	a.write(mediaY, "example", existing, v, where, schema.Value, mode)
 }

@@ -3,6 +3,7 @@ package apply
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -153,10 +154,9 @@ func TestApplyWritesExamples(t *testing.T) {
 	if v, _ := example(t, r.doc, "paths", "/apps/{id}", "get", "parameters", "0", "example").(json.Number); v != "7" {
 		t.Errorf("getApp id = %v, want 7 from appId", v)
 	}
-	// generic {key} without default, bound to createApp /AppCode: the value
-	// of the producer's example, not a generated one
-	if v := example(t, r.doc, "paths", "/users/{key}", "parameters", "0", "example"); v != "a1" {
-		t.Errorf("deleteUser key = %v, want a1 from the createApp example", v)
+	// generic {key} without default: a value kept per path
+	if v := example(t, r.doc, "paths", "/users/{key}", "parameters", "0", "example"); v == nil || r.dict.Paths["/users/{key}"] == nil {
+		t.Errorf("deleteUser key = %v, dictionary %v", v, r.dict.Paths)
 	}
 
 	// a shared parameter cannot take an operation-specific default
@@ -428,55 +428,6 @@ func TestApplyKeepsDefaultsInDictionary(t *testing.T) {
 	}
 }
 
-// A response example agrees with the path: the Id of the planet read by
-// id is the id of the path, the moons of a planet carry its id, and a
-// value from the defaults is kept in the DTO field of the dictionary.
-func TestApplyMatchesPathValues(t *testing.T) {
-	r := applyToFile(t, "lists.yaml", `{"/Planet/id/{id}": 100, "/Planet/id/{id}/Moon": 7, "Code": "terra"}`, Options{Seed: 1})
-	if len(r.res.Fatal) > 0 {
-		t.Fatalf("fatal: %v", r.res.Fatal)
-	}
-	get := func(path string) any {
-		return example(t, r.doc, "paths", path, "get", "responses", "200", "content", "application/json", "example")
-	}
-	if p, _ := get("/Planet/id/{id}").(map[string]any); p["Id"] != json.Number("100") {
-		t.Errorf("planet by id: %v", p)
-	}
-	if p, _ := get("/Planet/{Code}").(map[string]any); p["Code"] != "terra" {
-		t.Errorf("planet by code: %v", p)
-	}
-	moons, _ := get("/Planet/id/{id}/Moon").([]any)
-	if m, _ := moons[0].(map[string]any); len(moons) != 1 || m["PlanetId"] != json.Number("7") {
-		t.Errorf("moons of planet: %v", moons)
-	}
-	// /Planet/{Code}/Moon/id/{id}: Code names the planet, not the moon
-	if m, _ := get("/Planet/{Code}/Moon/id/{id}").(map[string]any); m["Code"] != nil {
-		t.Errorf("moon got the planet code: %v", m)
-	}
-	if v := r.dict.Schemas["PlanetRead"].Properties["Id"].Value; v != json.Number("100") {
-		t.Errorf("dictionary PlanetRead.Id: %v", v)
-	}
-}
-
-// A parameter bound to a list GET takes its example from the producer's
-// example, and the response of the operation follows it.
-func TestApplyBoundParameterFollowsProducer(t *testing.T) {
-	r := applyToFile(t, "lists.yaml", `{"getPlanetById.id": {"bind": "listPlanets", "pointer": "/0/Id"}}`, Options{Seed: 1})
-	if len(r.res.Fatal) > 0 {
-		t.Fatalf("fatal: %v", r.res.Fatal)
-	}
-	list, _ := example(t, r.doc, "paths", "/Planet", "get", "responses", "200", "content", "application/json", "example").([]any)
-	first, _ := list[0].(map[string]any)
-	param := example(t, r.doc, "paths", "/Planet/id/{id}", "get", "parameters", "0", "example")
-	if param == nil || param != first["Id"] {
-		t.Errorf("parameter %v, first planet %v", param, first["Id"])
-	}
-	planet, _ := example(t, r.doc, "paths", "/Planet/id/{id}", "get", "responses", "200", "content", "application/json", "example").(map[string]any)
-	if planet["Id"] != first["Id"] {
-		t.Errorf("response %v, first planet %v", planet["Id"], first["Id"])
-	}
-}
-
 func TestVerify(t *testing.T) {
 	verify := func(defaultsJSON string) []string {
 		t.Helper()
@@ -499,4 +450,31 @@ func TestVerify(t *testing.T) {
 			t.Errorf("%s: %v", c.defaults, p)
 		}
 	}
+}
+
+// A path default of a parameter that holds a record key selects the record;
+// a shared parameter object is then no conflict, the records give every
+// path its value.
+func TestApplyRecordKeySharedParam(t *testing.T) {
+	defs := `{"/Dock/id/{id}": 7, "/Ship/id/{id}": 31}`
+	without := applyToFile(t, "records.yaml", defs, Options{Seed: 1})
+	if !hasNote(without.res, CodeSharedParam) {
+		t.Fatalf("without RecordKey: %v", without.res.Notes)
+	}
+	keyed := applyToFile(t, "records.yaml", defs, Options{Seed: 1, RecordKey: func(*spec.Operation, string) bool { return true }})
+	if hasNote(keyed.res, CodeSharedParam) || len(keyed.res.Fatal) > 0 {
+		t.Errorf("with RecordKey: %v %v", keyed.res.Notes, keyed.res.Fatal)
+	}
+	if !strings.Contains(fmt.Sprint(keyed.res.Notes), "selects the record") {
+		t.Errorf("notes: %v", keyed.res.Notes)
+	}
+}
+
+func hasNote(r *Result, code string) bool {
+	for _, n := range r.Notes {
+		if n.Code == code {
+			return true
+		}
+	}
+	return false
 }

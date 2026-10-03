@@ -18,9 +18,9 @@ each with its PUT and DELETE, and a POST on `/book` and `/student`? This directo
 | File | Content |
 |---|---|
 | `openapi.original.yaml` | the spec as written by hand: conflicting paths, no examples |
-| `openapi.yaml` | the same spec after `apitest-gen apply` (examples, links, extensions) |
+| `openapi.yaml` | the same spec after `apitest-gen apply` (examples and extensions, no links) |
 | `openapi.fixed.yaml` | the fixed spec: class operations at `/book/class/{class}` and `/student/class/{class}`, after `apply` |
-| `defaults.json` | written by `review` (the 12 bindings) plus six extension entries by hand (see [Findings](#findings) 6 to 8) |
+| `defaults.json` | six extension entries by hand (see [Findings](#findings) 6 to 8); `review` proposes nothing else |
 | `global-dict.json` | the dictionary written by `apply` |
 | `server/server.go` | in-memory API. `New()` serves only `/book/{id}` (a Go `ServeMux` panics if both templates are registered); `NewFixed()` also serves `/…/class/{class}` |
 | `api_test.go` | `TestFixed`: the fixed spec against `NewFixed()` |
@@ -309,56 +309,37 @@ apitest-gen review -spec openapi.yaml
 ```
 
 ```text
-review: 20 suggestions; 12 defaults proposed, 0 values to choose, 0 defaults to correct, 6 fixed by apply, 2 to fix in the spec
+model: 2 resources; the examples of each follow one record through the run
+  Book: schemas Book; keys Class, Id; list getBookByClass; read getBookById; create createBook; update updateBook; delete deleteBookClass, deleteBook
+  Student: schemas Student; keys Class, Id; list getStudentByClass; read getStudentById; create createStudent; update updateStudent; delete deleteStudentClass, deleteStudent
+  ORDER                 the examples follow apitest's default order; if the test sets MethodOrder, DeleteLast or Tags, copy them into "$apitest" in defaults.json
+review: 8 suggestions; 0 defaults proposed, 0 values to choose, 0 defaults to correct, 6 fixed by apply, 2 to fix in the spec
   SPEC     paths./book/{class}: path "/book/{class}" conflicts with "/book/{id}" (same template); servers cannot route both
   SPEC     paths./student/{class}: path "/student/{class}" conflicts with "/student/{id}" (same template); servers cannot route both
-  DEFAULT  getBookByClass.class = {"bind":"createBook","pointer":"/Class"}  (heuristic at paths./book/{class}.get.parameters[class])
-  DEFAULT  updateBookClass.class = {"bind":"createBook","pointer":"/Class"}  (heuristic at paths./book/{class}.put.parameters[class])
-  DEFAULT  deleteBookClass.class = {"bind":"createBook","pointer":"/Class"}  (heuristic at paths./book/{class}.delete.parameters[class])
-  DEFAULT  getBookById.id = {"bind":"createBook","pointer":"/Id"}  (heuristic at paths./book/{id}.get.parameters[id])
-  DEFAULT  updateBook.id = {"bind":"createBook","pointer":"/Id"}  (heuristic at paths./book/{id}.put.parameters[id])
-  DEFAULT  deleteBook.id = {"bind":"createBook","pointer":"/Id"}  (heuristic at paths./book/{id}.delete.parameters[id])
-  DEFAULT  getStudentByClass.class = {"bind":"createStudent","pointer":"/Class"}  (heuristic at paths./student/{class}.get.parameters[class])
-  DEFAULT  updateStudentClass.class = {"bind":"createStudent","pointer":"/Class"}  (heuristic at paths./student/{class}.put.parameters[class])
-  DEFAULT  deleteStudentClass.class = {"bind":"createStudent","pointer":"/Class"}  (heuristic at paths./student/{class}.delete.parameters[class])
-  DEFAULT  getStudentById.id = {"bind":"createStudent","pointer":"/Id"}  (heuristic at paths./student/{id}.get.parameters[id])
-  DEFAULT  updateStudent.id = {"bind":"createStudent","pointer":"/Id"}  (heuristic at paths./student/{id}.put.parameters[id])
-  DEFAULT  deleteStudent.id = {"bind":"createStudent","pointer":"/Id"}  (heuristic at paths./student/{id}.delete.parameters[id])
   APPLY    paths./book.post.requestBody: required body without example: no value for /Class
   APPLY    paths./book/{class}.put.requestBody: required body without example: no value for /Class
   APPLY    paths./book/{id}.put.requestBody: required body without example: no value for /Class
   APPLY    paths./student.post.requestBody: required body without example: no value for /Class
   APPLY    paths./student/{class}.put.requestBody: required body without example: no value for /Class
   APPLY    paths./student/{id}.put.requestBody: required body without example: no value for /Class
-defaults.json: 12 entries added; check them, change or delete what is wrong, then run: apitest-gen -spec openapi.yaml
+defaults.json: created (empty), nothing to add
 ```
 
-`defaults.json` did not exist; `review` created it with the 12 bindings, as plain data:
+`review` first shows the resource model: `Book` and `Student`, identified by `Class` and `Id`, created by the POST. apitest binds `{id}` and `{class}` to `createBook`/`createStudent` by its heuristic (the POST on the collection, the field of the same name). `review` proposes no binding for that: the generator gives the examples exactly the values the heuristic takes, so no `links` are needed in the spec.
+
+**Review:** the missing body examples need nothing, `apply` writes them. The conflict (`SPEC`) is the point of this example; it is fixed in step 6.
+
+Three decisions were added by hand after the first test of the fixed spec (see [Findings](#findings) 6 to 8):
 
 ```json
 {
-  "getBookByClass.class": { "bind": "createBook", "pointer": "/Class" },
-  "updateBookClass.class": { "bind": "createBook", "pointer": "/Class" },
-  "deleteBookClass.class": { "bind": "createBook", "pointer": "/Class" },
-  "getBookById.id": { "bind": "createBook", "pointer": "/Id" },
-  …
-  "deleteStudent.id": { "bind": "createStudent", "pointer": "/Id" }
-}
-```
-
-The reasons, the missing body examples and the conflict are only printed (with `-v` one reason per entry).
-
-**Review:** the server returns `Id` and `Class` from the POST, so all 12 bindings are right and stay. The missing body examples need nothing, `apply` writes them. The conflict (`SPEC`) is the point of this example; it is fixed in step 6.
-
-Three more decisions were added by hand after the first test of the fixed spec (see [Findings](#findings) 6 to 8), at the end of `defaults.json`:
-
-```json
   "updateBookClass.x-apitest-compare": "schema",
   "updateBookClass.x-apitest-verify": false,
   "updateStudentClass.x-apitest-compare": "schema",
   "updateStudentClass.x-apitest-verify": false,
   "deleteBookClass.x-apitest-order": 10,
   "deleteStudentClass.x-apitest-order": 10
+}
 ```
 
 ### 3. `apitest-gen`: dictionary and spec
@@ -369,29 +350,18 @@ apitest-gen -spec openapi.yaml
 
 ```text
 dictionary global-dict.json created: 4 DTOs, 8 fields, 2 parameters; values: 10 new, 0 reused, 0 kept, 0 invalid, 0 repaired, 0 without value
-spec openapi.yaml: 20 examples added, 0 replaced, 0 with defaults, 0 kept, 0 incomplete; 6 extensions, 12 bindings; 0 dictionary values from defaults
-verify: 18 defaults entries checked against the written spec, no problems
+spec openapi.yaml: 20 examples added, 0 replaced, 0 with defaults, 0 kept, 0 incomplete; 6 extensions, 0 bindings; 0 dictionary values from defaults
+records: 2 resources, 2 records (generated); 2 updates on the way; 8 examples from the records, 0 parameters copied into their path
+  RECORD                Book: #1 Class="K" Id=981
+  RECORD                Student: #1 Class="B" Id=922
+verify: 6 defaults entries and the examples of 2 resources checked against the written spec, no problems
 ```
 
-Before anything is saved, `apitest-gen` loads the written spec and checks all 18 entries of `defaults.json` against it (`verify`): every binding is there and its pointer finds a value in the example of `createBook`/`createStudent`, every extension is set. With a problem nothing is written.
+The cases are played in the order apitest runs them. The book `createBook` creates is the record the reads, the update and the deletes address (their keys are bound to it), so every example shows it: `{id}` is its `Id`, `{class}` its `Class`, and `updateBook` sends a new `Title`. In apitest's default order the reads run before the update and expect the title of the POST; with `MethodOrder: POST, PUT, GET, DELETE` they would expect the new one.
 
-The path parameters are defined on the path, so they are shared by GET, PUT and DELETE. The 12 bindings are therefore written as `links` on the `201` of `createBook` and `createStudent`, not as `x-apitest-bind`:
+Before anything is saved, `apitest-gen` loads the written spec, builds and orders the cases the way apitest does and plays them again on the records (`verify`): every parameter must address a record, every read and list must show the record as it is at that point, every extension must be set. With a problem nothing is written.
 
-```yaml
-      responses:
-        "201":
-          …
-          links:
-            getBookByClass_class:
-              operationId: getBookByClass
-              parameters:
-                class: $response.body#/Class
-            …
-            getBookById_id:
-              operationId: getBookById
-              parameters:
-                id: $response.body#/Id
-```
+The spec gets examples and the six extensions, no `links`.
 
 ### 4. `review` and `check` again
 
@@ -447,8 +417,11 @@ go test -run TestFixed -v .
 
 ```text
 dictionary global-dict.json updated: 4 DTOs, 8 fields, 2 parameters; values: 0 new, 0 reused, 10 kept, 0 invalid, 0 repaired, 0 without value
-spec openapi.fixed.yaml: 20 examples added, 0 replaced, 0 with defaults, 0 kept, 0 incomplete; 6 extensions, 12 bindings; 0 dictionary values from defaults
-verify: 18 defaults entries checked against the written spec, no problems
+spec openapi.fixed.yaml: 0 examples added, 0 replaced, 2 with defaults, 18 kept, 0 incomplete; 0 extensions, 0 bindings; 0 dictionary values from defaults
+records: 2 resources, 2 records (generated); 2 updates on the way; 2 examples from the records, 0 parameters copied into their path
+  RECORD                Book: #1 Class="K" Id=981
+  RECORD                Student: #1 Class="B" Id=922
+verify: 6 defaults entries and the examples of 2 resources checked against the written spec, no problems
 review: 0 suggestions; 0 defaults proposed, 0 values to choose, 0 defaults to correct, 0 fixed by apply, 0 to fix in the spec
 nothing to review
 defaults.json: nothing added
@@ -456,7 +429,9 @@ check: 42 of 42 cases can be sent, 0 problems
 ok  	github.com/fada4773-sketch/apigen-apitest/examples/path-conflict
 ```
 
-The same `defaults.json` serves both specs: the operationIds did not change. Nothing is left to review, and **all 42 cases pass** (report: `apitest-report/fixed.md`, no spec findings).
+The same `defaults.json` serves both specs: the operationIds did not change. Nothing is left to review, and **all 42 cases pass** (report: `apitest-report/fixed.md`). The report lists 12 spec findings: the parameters apitest binds by its heuristic, which is intended here.
+
+The same spec also passes with `MethodOrder: POST, PUT, GET, DELETE` and `DeleteLast: true` (and `"$apitest": {"MethodOrder": ["POST", "PUT", "GET", "DELETE"], "DeleteLast": true}` in `defaults.json`): then `getBookById` runs after `updateBook` and expects the new title.
 
 ## Findings
 
@@ -466,13 +441,12 @@ The same `defaults.json` serves both specs: the operationIds did not change. Not
 | 2 | Every class case fails with `status code 400 is not documented in the spec`. | The server has one route for `/book/{…}`. `GET /book/K` reaches the id handler: `id must be a positive number`. A Go `ServeMux` panics when both templates are registered; other routers take the first one or the last one. | Rename the path. |
 | 3 | Even `createBook/default` fails: `the written resource cannot be read back: GET /book/K returns 400`. | After a POST, apitest reads the resource with the GET `<collection>/{param}` whose parameter is bound to that POST. Both GETs qualify, and `/book/{class}` comes first. So the conflict also breaks a valid operation. | Rename the path. With a valid spec there is only one such GET. |
 | 4 | The `{id}` cases and all authentication cases pass. | The server routes `{id}`; the 401 comes from the middleware before routing. | – |
-| 5 | `review` proposes the class bindings from `createBook` → `/Class`. | The heuristic matches the parameter `class` to the body field `Class`. | Accepted after checking the server. |
+| 5 | apitest binds `{class}` to `createBook` → `/Class` by its heuristic; `review` proposes no binding. | The heuristic matches the parameter `class` to the body field `Class`; the generator gives the examples the values it takes. | – (no `links` in the spec) |
 | 6 | Fixed spec, `updateBookClass/default`: `EXAMPLE_MISMATCH` at `/0/Class`, expected `"K"`, actual `"X"`. | The PUT moves the books to the class in the body. The generated response example takes `Book.Class` from the dictionary and cannot know that. | `"updateBookClass.x-apitest-compare": "schema"`. Setting `"updateBookClass.Class": "X"` is not possible, see 9. |
 | 7 | Then `DATA_MISMATCH: data was not stored as sent: GET /book/class/X differs`. | After a PUT, apitest compares the sent body with the GET on the same path, and that GET returns a list. This is open point OP-09 in the plan. | `"updateBookClass.x-apitest-verify": false` until apitest compares with list elements. |
 | 8 | Then `deleteBook/default` gets 404 instead of 204. | `deleteBookClass` ran first (both are DELETEs of the same group) and deleted every book of the class, also the one `deleteBook` needs. | `"deleteBookClass.x-apitest-order": 10`: delete by class last. |
-| 9 | `defaults.json` rejects `"updateBookClass.Class"` next to the binding `"updateBookClass.class"`: `are the same key (keys ignore case)`. | Keys ignore case, and the body field `Class` and the path parameter `class` have the same name. | Use another key form (`Dto.Name`) or, as here, an extension. Worth a decision: keys could compare case-sensitively when both forms exist. |
-| 10 | `apply` wrote the new `links` as one long flow mapping. | The mapping was created empty (`{}`, flow style) and then filled. | Fixed in `apply`: new `links` are written in block style. |
-| 11 | The generated `{id}` example is `404`. | A random integer ≥ 1. Harmless: at run time the bound id from `createBook` is used. | – |
+| 9 | `defaults.json` keys ignore case: `"updateBookClass.Class"` and `"updateBookClass.class"` are the same key. | The body field `Class` and the path parameter `class` have the same name. | Use another key form (`Dto.Name`) or, as here, an extension. |
+| 10 | The `{id}` example is `981`, the `Id` of the record. | The examples of the book `createBook` creates. At run time the id the server returns is used, bound by the heuristic. | – |
 
 ## Recommendation
 

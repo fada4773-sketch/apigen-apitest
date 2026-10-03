@@ -293,10 +293,74 @@ func TestApplyVerifyFailsWritesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, out, errOut = cli("-spec", path, "-dict", dictPath, "-defaults", defs)
-	if code != 0 || !strings.Contains(out, "verify: 1 defaults entries checked") {
+	if code != 0 || !strings.Contains(out, "verify: 1 defaults entries and the examples of") {
 		t.Fatalf("exit %d\n%s\n%s", code, out, errOut)
 	}
 	if after, _ := os.ReadFile(path); string(after) == string(before) {
 		t.Error("the spec was not written")
+	}
+}
+
+// With -base-url the records come from the running instance; a failing
+// request stops the run before anything is written.
+func TestApplySnapshot(t *testing.T) {
+	up := true
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !up {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		dock := `{"Id": 7, "Code": "abc", "Name": "Moon Dock"}`
+		switch r.URL.Path {
+		case "/Dock":
+			_, _ = w.Write([]byte("[" + dock + "]"))
+		case "/Dock/id/7", "/Dock/abc":
+			_, _ = w.Write([]byte(dock))
+		case "/Dock/abc/Ship":
+			_, _ = w.Write([]byte(`[{"Id": 31, "Name": "Pilot Ship", "DockId": 7}]`))
+		case "/Ship/id/31":
+			_, _ = w.Write([]byte(`{"Id": 31, "Name": "Pilot Ship", "DockId": 7}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	dir, path := copySpec(t, "records.yaml")
+	defs := filepath.Join(dir, "defaults.json")
+	if err := os.WriteFile(defs, []byte(`{"$apitest": {"MethodOrder": ["POST", "PUT", "GET", "DELETE"], "DeleteLast": true}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dictPath := filepath.Join(dir, "dict.json")
+
+	up = false
+	before, _ := os.ReadFile(path)
+	code, out, errOut := cli("-spec", path, "-dict", dictPath, "-defaults", defs, "-base-url", srv.URL)
+	if code != 1 || !strings.Contains(out, "SNAPSHOT_FAILED") || !strings.Contains(errOut, "nothing was written") {
+		t.Fatalf("instance down: %d\n%s\n%s", code, out, errOut)
+	}
+	if after, _ := os.ReadFile(path); string(after) != string(before) {
+		t.Error("the spec was changed")
+	}
+
+	up = true
+	code, out, errOut = cli("-spec", path, "-dict", dictPath, "-defaults", defs, "-base-url", srv.URL)
+	if code != 0 || !strings.Contains(out, "records: 2 resources, 2 records (snapshot of "+srv.URL) {
+		t.Fatalf("snapshot: %d\n%s\n%s", code, out, errOut)
+	}
+	written, _ := os.ReadFile(path)
+	for _, want := range []string{"Code: abc", "Id: 31", "Message: Successfully updated Dock"} {
+		if !strings.Contains(string(written), want) {
+			t.Errorf("spec lacks %q", want)
+		}
+	}
+	if d, _ := os.ReadFile(dictPath); !strings.Contains(string(d), `"records"`) {
+		t.Errorf("dictionary without records:\n%s", d)
+	}
+
+	// review shows the model and proposes nothing for the record keys
+	code, out, _ = cli("review", "-spec", path, "-dict", dictPath, "-defaults", defs, "-dry-run")
+	if code != 0 || !strings.Contains(out, "Dock: schemas DockRead, DockUpdate; keys Id, Code") {
+		t.Errorf("review: %d\n%s", code, out)
 	}
 }

@@ -856,11 +856,11 @@ For a step-by-step example, see [workflow.md](workflow.md).
 
 | Command | Does |
 |---|---|
-| `apitest-gen [apply] -spec …` | **default.** Updates the dictionary (creates it and an empty defaults file on the first run), then writes missing or invalid examples into the spec, in place or to `-out`. With `-base-url` the sources in the defaults are fetched first. Before anything is saved, every entry of the defaults is checked against the written spec; with a problem nothing is written (see [13.8](#138-verify-before-saving)). With `-check` the written spec is also checked for cases apitest cannot send. |
+| `apitest-gen [apply] -spec …` | **default.** Updates the dictionary (creates it and an empty defaults file on the first run), then writes missing or invalid examples into the spec, in place or to `-out`, and makes the examples of every resource follow one record through the run (see [13.5](#135-records-examples-that-follow-the-data)). With `-base-url` the records are fetched from a running instance, and the sources in the defaults too. Before anything is saved, every entry of the defaults is checked against the written spec; with a problem nothing is written (see [13.9](#139-verify-before-saving)). With `-check` the written spec is also checked for cases apitest cannot send. |
 | `apitest-gen dict -spec …` | Only creates or updates the dictionary. |
 | `apitest-gen discover -defaults … -base-url …` | Fetches the sources of the defaults (`{"from": "GET …", "pick": …}`) and writes the values to `-out`. |
 | `apitest-gen check -spec …` | Reports every case apitest could not send and every example that violates its schema. Writes nothing. |
-| `apitest-gen review -spec …` | Evaluates everything apitest and apitest-gen would report: spec findings, cases that cannot be sent, values that cannot be generated, wrong defaults. Writes the fixes as data into the defaults file (the first of `-defaults`, created if missing): bindings, also to list GETs, and values; the reasons are printed (see [13.10](#1310-reviewing-findings)). Changes neither spec nor dictionary. |
+| `apitest-gen review -spec …` | Evaluates everything apitest and apitest-gen would report: spec findings, cases that cannot be sent, values that cannot be generated, wrong defaults. Shows the resource model. Writes the fixes as data into the defaults file (the first of `-defaults`, created if missing): values and `$snapshot`, no bindings; the reasons are printed (see [13.11](#1311-reviewing-findings)). Changes neither spec nor dictionary. |
 | `apitest-gen help` | Shows all commands and flags. |
 
 Exit codes: `0` success, `1` a problem (fatal defaults, `check` findings, a file that cannot be read or written), `2` wrong usage.
@@ -877,9 +877,9 @@ Exit codes: `0` success, `1` a problem (fatal defaults, `check` findings, a file
 | `-seed <n>` | `42` | apply, dict, review | Seed for **new** values. The same seed and field always give the same value; existing values are never touched by the seed. |
 | `-repair` | off | apply, dict | Regenerate dictionary values that no longer fit their schema. Without it they are kept and reported. |
 | `-overwrite` | off | apply | Replace valid existing examples too, not only missing or invalid ones. Named `examples` are never replaced. |
-| `-generic-ids <names>` | `id,uuid,key` | apply, review | Path parameter names that mean another resource on every path (see [13.5](#135-generic-path-ids)). |
+| `-generic-ids <names>` | `id,uuid,key` | apply, review | Path parameter names that mean another resource on every path (see [13.6](#136-generic-path-ids)). |
 | `-check` | off | apply | Check the written spec afterwards; exit code 1 on problems. |
-| `-base-url <url>` | – | apply, discover | Environment to fetch sources from. |
+| `-base-url <url>` | – | apply, discover | Running instance (the same base URL as `Config.BaseURL`). apply fetches the records of every resource from it (GET only, see 13.5) and the sources of the defaults; discover only the sources. |
 | `-token-env <name>` | – | apply, discover | Environment variable with a bearer token for `-base-url`. The token is never printed. |
 | `-header "Name: value"` | – | apply, discover | Extra header for `-base-url`; repeatable. |
 | `-dry-run` | off | apply, dict, review | Show what would change; write neither spec nor dictionary (review: no proposals file). |
@@ -906,7 +906,7 @@ Comments, key order and block style of the YAML are kept; JSON files stay JSON. 
 
 For every place, the first source with a value wins:
 
-1. **`defaults.json`**: a matching key (13.6), adjusted to the type if needed. It wins over everything, also inside existing examples.
+1. **`defaults.json`**: a matching key (13.7), adjusted to the type if needed. It wins over everything, also inside existing examples.
 2. **An existing example** that fits its schema (unless `-overwrite`).
 3. **The dictionary**: the value of this DTO field or parameter.
 
@@ -923,20 +923,117 @@ A field gets **no value** (`NO_VALUE`, `PATTERN_PENDING`, `TYPE_CONFLICT`) only 
 
 Every value is validated against its schema before it is used. Compound names share one value across DTOs and parameters (`dockCode` and `DockCode`), generated for the strictest place first, so a parameter with a pattern and a field without one get the same value. Generic names (`Name`, `Id`, `Version`) get a value per DTO.
 
-**Bound parameters follow their producer.** A path parameter with a binding in `defaults.json` gets as example the value its producer's example has at the pointer. With `"GetBookById.id": {"bind": "GetBooks", "pointer": "/0/Id"}` and a `GetBooks` example whose first element has `Id: 550`, the parameter `id` gets `550`, and so does the response of `GetBookById`. A fixed value for the parameter in `defaults.json` (`"appId": 7`, `"/Book/id/{id}": 7`) still wins. At run time apitest takes the real value from `GetBooks`; the examples only tell the same story.
+**Examples of a resource follow its record.** Path parameters that hold a key, the request bodies of updates, the responses of reads, updates and lists, and the keys in other response DTOs (`Response.Id`) are then taken from the records of 13.5. They win over the existing example and over the dictionary; defaults still win, as described there.
 
-**Response examples follow the path.** The example of a 2xx response agrees with the path parameters of its operation, in new and in existing examples:
+### 13.5 Records: examples that follow the data
 
-| Operation | Path example | Response example |
-|---|---|---|
-| `GET /Book/id/{id}` → `BookRead` | `id: 100` | `Id: 100` (the resource itself: a generic id is its `Id`) |
-| `GET /Book/{Code}` → `BookRead` | `Code: tulz` | `Code: tulz` (the field of the same name) |
-| `GET /Book/id/{id}/Article` → list of `ArticleRead` | `id: 100` | every element `BookId: 100` (another resource: `<Resource><Name>`) |
-| `GET /Book/{Code}/Article/id/{id}` → `ArticleRead` | `Code: tulz`, `id: 7` | `Id: 7`; `Code` stays, it is the code of the Book, not of the Article |
+apitest runs the cases in a fixed order against one database. After `UpdateBookById` changed the name of a book, `GetBook` returns the new name. So an example must show the data as they are **at the position of its case**, and all examples of one book must agree: the path parameters, the bodies, the responses and the lists. apitest-gen does this without any binding or extension in the spec:
 
-The resource of a parameter is the literal segment in front of it (a literal `id` is skipped), and the response DTO belongs to it if its name starts with it (`BookRead` for `Book`). If the path value came from `defaults.json`, it is also kept in that DTO field of the dictionary (`DICT_FROM_DEFAULTS`). Request bodies are not changed: a PUT may change the key on purpose.
+1. It detects the **resources** of the spec (the model).
+2. Every resource gets **records**: the data the test database starts with, fetched from a running instance or generated.
+3. It plays the cases **in the order apitest runs them** on the records. An update changes the record.
+4. Every example shows the record as it is at its case.
+5. Before saving, it plays the cases of the written spec again and checks every example (13.9).
 
-### 13.5 Generic path ids
+#### The model
+
+| From the spec | Detected |
+|---|---|
+| DTO names with the same stem: `BookRead`, `BookUpdate` (suffixes such as `Read`, `Update`, `Create`, `Dto`, `Request`, `Response`, `Details`, `Base`) | one resource `Book` |
+| a GET that returns the DTO or a list of it (also a page `{items: [...], total}`) | the resource exists; read or list |
+| `/Book/id/{id}`, `/Book/{Code}` | keys: the field a path parameter holds (`{Code}` → `Code`, `{id}` → `Id`). The resource is the literal segment in front of the parameter; a segment `id`, `code`, `key`, `name` or the parameter name itself is skipped. |
+| `/Book/{Code}/Article`, `/Book/id/{id}/Article` | `Article` belongs to `Book`; its field `BookId` or `BookCode` refers to the book |
+| PUT or PATCH with a body of the resource | update; POST: create; DELETE at the path of a read: delete |
+
+`apitest-gen review` prints the model:
+
+```text
+model: 2 resources; the examples of each follow one record through the run
+  Article: schemas ArticleRead, ArticleUpdate; keys Id; below Book; list GetArticles; read GetArticleById; update UpdateArticleById
+  Book: schemas BookRead, BookUpdate; keys Id, Code; list GetBooks; read GetBookById, GetBook; update UpdateBookById, UpdateBook
+```
+
+If something is detected wrongly, correct it in `defaults.json`:
+
+```json
+{ "$model": { "Book": { "schemas": ["BookRead", "BookUpdate", "BookPatch"], "keys": ["Isbn"] } } }
+```
+
+`schemas` replaces the DTOs of the resource (the one the GETs return first), `keys` adds fields that identify a record. Operations of no resource keep their examples as described in 13.4.
+
+#### Where the records come from
+
+**With `-base-url`** (a snapshot). apitest-gen sends only GET requests to the running instance, which must hold the same data as the database of the test (for a test container: the same seed):
+
+1. For every resource, the list it is fetched from: `"$snapshot"`, or the list of the resource with the fewest parameters that are no keys of its own. A list below another resource (`/Book/{Code}/Article`) uses the key of the first record of that resource, so parents are fetched first.
+2. The first `count` elements become the records (`#1`, `#2`, …). `#1` is the record the path parameters show.
+3. Every record is read again with each read of the resource (`GET /Book/id/7`, `GET /Book/abc`). Fields only the read returns are added. A field that differs between two responses stops the run (`SNAPSHOT_MISMATCH`).
+4. The other lists of the resource are fetched too. Their examples show the elements the instance returns.
+
+```json
+{
+  "$snapshot": {
+    "Book":    { "from": "GetBooks", "count": 3 },
+    "Article": { "from": "GetArticles" }
+  }
+}
+```
+
+`count` is 1 if left out. Every fetched element is validated against the schema of the response; a violation, a failing request or fewer elements than `count` stop the run, and nothing is written. An empty list means the test starts without such records (`SNAPSHOT_EMPTY`): the examples then show only the records the test creates. `-token-env` and `-header` apply as for `discover`.
+
+**Without `-base-url`** the first record is built from the examples apply wrote (a list element first, then the reads, then the bodies), so it comes from the dictionary and the defaults. Further records (`count`) get new values. The records are kept in the dictionary (13.8) and reused on the next run, so the examples stay the same.
+
+**Defaults and records.** A key value in the defaults selects the record: `"GetBook.Code": "def"`, `"/Book/id/{id}": 8` or `"BookRead.Code": "def"` (a field default of a key field) makes the element with that key record `#1`; if the list does not contain it, apitest-gen reads it with its key, and if it does not exist the run stops (`SNAPSHOT_KEY`). Two defaults that set one key differently stop the run (`DEFAULT_CONFLICT`). Other field defaults (`"BookRead.Name"`) set the first generated record. They do **not** change a fetched record: the examples must show what the server answers (`SNAPSHOT_WINS`).
+
+**Keys fit every parameter.** A path parameter often has a pattern its DTO field lacks (`{Code}` with `^[a-z]+$`, `Code` without). A generated key gets a value that fits both. A fetched key or one from the defaults that violates a parameter stops the run.
+
+#### The order of the run
+
+The cases are ordered by apitest's own code, with the settings of your test. Copy them from `apitest.Config` into `"$apitest"`; the field names are the same:
+
+```json
+{ "$apitest": { "MethodOrder": ["POST", "PUT", "GET", "DELETE"], "DeleteLast": true, "IgnoreFields": ["Message"] } }
+```
+
+| Field | Effect on the examples |
+|---|---|
+| `MethodOrder` | with `PUT` before `GET`, the reads expect what the updates sent; in apitest's default order the reads run first and expect the start record |
+| `DeleteLast` | DELETEs run at the end; nothing reads a deleted record |
+| `Tags`, `IncludeOps`, `ExcludeOps` | only these cases run, in the order of `Tags` |
+| `IgnoreFields` | fields `verify` does not compare |
+
+Without `"$apitest"`, apitest's defaults apply, and `review` reminds you (`ORDER`). **It must match the test**, otherwise the examples follow another order than the run.
+
+#### What the examples show
+
+| Place | Value |
+|---|---|
+| a path parameter that holds a key | the key of the record the case addresses (of the parent record for `/Book/{Code}/Article`) |
+| the body of an update (default example) | the record with **new** valid values for every simple field that is no key and does not refer to the parent; `"<operationId>.<Field>"` in the defaults sets a field for this update |
+| the response of a read or an update (the resource's DTO) | the record after the case |
+| the response of a list | the records in their state at this point (fetched lists: the fetched elements, each record in its state); a list with its own key parameter (`/book/class/{class}`) only the records with that value |
+| another response DTO (`Response {Id, Message}`) | its key fields from the record (`Id`) |
+| a field named `Message` (string), in every response example | `Successfully <verb> <Resource>` for 2xx, `Error while <verb>ing <Resource>` for the others (`updated`, `created`, `deleted`, `retrieved`); a response shared by different operations says `the request`. A default for the field wins. |
+
+Named examples are curated: they are not changed, but an update with a named body still changes the record. Error responses get no new example, only the message in an existing one.
+
+**Records created by the test.** When apitest binds a key to a POST (a link, `x-apitest-bind` or its heuristic), the case addresses the record that POST creates: the body of the POST plus what its response example adds. apitest takes the value of the first successful POST of an operation; so does apitest-gen. A key the server assigns (an `Id` not in the body) cannot be known; apitest-gen reports `CREATED_KEY` unless the field is `readOnly` or a `uuid`/`date-time`, which apitest only checks for presence. A record with the same keys as a start record replaces it in the lists.
+
+**Shared parameters.** A parameter object shared by paths of different resources (`$ref: '#/components/parameters/id'` for `/Book/id/{id}` and `/Article/id/{id}`) can only hold one example. apitest-gen copies it into the path that needs another value (`PARAM_INLINED`). This is the only change besides examples. A parameter declared once on a path for operations that need different values, and a shared response that would need two examples, stop the run (`EXAMPLE_SHARED`).
+
+**Example** (`MethodOrder: POST, PUT, GET, DELETE`, record `Book #1 Id=7 Code=abc Name="Brazilian Book"`):
+
+| # | Case | Book #1 | Example |
+|---|---|---|---|
+| 1 | `UpdateBookById` `{id}=7` | Name → `Quiet Book` | body `{Code: abc, Name: Quiet Book}`, response `{Id: 7, Message: Successfully updated Book}` |
+| 2 | `UpdateBook` `{Code}=abc` | Name → `Golden Book` | body `{Code: abc, Name: Golden Book}` |
+| 3 | `GetBookById` `{id}=7` | | `{Id: 7, Code: abc, Name: Golden Book}` |
+| 4 | `GetBook` `{Code}=abc` | | the same |
+| 5 | `GetBooks` | | `[{Id: 7, Code: abc, Name: Golden Book}, …]` |
+
+After each PUT, apitest reads the resource at the same path and checks that the body was stored; the examples agree with that too.
+
+### 13.6 Generic path ids
 
 A path parameter named `id` (or `uuid`, `key`, see `-generic-ids`) means another resource on every path. Its value comes from the first match of:
 
@@ -949,9 +1046,9 @@ A path parameter named `id` (or `uuid`, `key`, see `-generic-ids`) means another
 
 When apitest can take the id from a POST at run time (a binding), that value wins anyway. The example only matters for operations without a producer.
 
-### 13.6 defaults.json
+### 13.7 defaults.json
 
-A JSON object. Keys are compared without regard to case; two keys that differ only in case are an error. So in one operation a body field and a parameter of the same name (`Class` and `class`) share the key `"<operationId>.class"`; use `"Dto.Class"` for the field. Keys starting with `$` are comments, except `$rejected` (a list of keys `review` must not propose again, see 13.10). A value `null` means "still to be filled in": it has no effect and is reported as `DEFAULT_TODO`.
+A JSON object. Keys are compared without regard to case; two keys that differ only in case are an error. So in one operation a body field and a parameter of the same name (`Class` and `class`) share the key `"<operationId>.class"`; use `"Dto.Class"` for the field. Keys starting with `$` are comments, except `$rejected` (a list of keys `review` must not propose again, see 13.11) and the generator settings `$snapshot`, `$model` and `$apitest` (13.5). A value `null` means "still to be filled in": it has no effect and is reported as `DEFAULT_TODO`.
 
 | Key | Example | Applies to |
 |---|---|---|
@@ -963,6 +1060,9 @@ A JSON object. Keys are compared without regard to case; two keys that differ on
 | `operationId.x-name` | `"scrapShip.x-apitest-verify": false` | an extension on the operation |
 | `operationId.param` with `bind` | `"bookDock.dockCode": {"bind": "listDocks", "pointer": "/0/DockCode"}` | where apitest takes the parameter from at run time |
 | any key with `from` | `"DockCode": {"from": "GET /docks", "pick": "/[Active=true]/DockCode"}` | a value fetched by `discover` or `-base-url`, then used like a plain value |
+| `$snapshot` | `{"Book": {"from": "GetBooks", "count": 3}}` | where the records of a resource are fetched with `-base-url` (13.5) |
+| `$model` | `{"Book": {"keys": ["Isbn"]}}` | corrections of the resource model (13.5) |
+| `$apitest` | `{"MethodOrder": ["POST", "PUT", "GET", "DELETE"], "DeleteLast": true}` | the apitest Config that orders the cases; must match the test (13.5) |
 
 Priority for fields: `Dto.Name` before `operationId.Name` before `Name`.
 
@@ -1079,7 +1179,7 @@ The pilot of a ship is `Captain`. Every other pilot, for example in `Crew` or a 
 
 `x-apitest-bind` and `x-apitest-compare-unordered` are rejected: apitest reads them on parameters and responses, not on operations. Other `x-…` extensions are set without a check. Removing a key later does not remove the extension from the spec.
 
-**Bindings** `{"bind": "<producer operationId>", "pointer": "/field"}` (or `"header": "Location"`, or `"pointer"` with `"request": true` for the body the producer sent) are written as `x-apitest-bind` when the parameter is defined in the operation. For a shared parameter they become a `links` entry on the producer's lowest 2xx response, unless that response is a shared component (`BIND_NOT_WRITTEN`).
+**Bindings** are rarely needed: the examples follow the bindings apitest finds by itself (13.5), so `review` proposes none. An explicit binding `{"bind": "<producer operationId>", "pointer": "/field"}` (or `"header": "Location"`, or `"pointer"` with `"request": true` for the body the producer sent) are written as `x-apitest-bind` when the parameter is defined in the operation. For a shared parameter they become a `links` entry on the producer's lowest 2xx response, unless that response is a shared component (`BIND_NOT_WRITTEN`).
 
 **Sources** `{"from": "GET /path", "pick": "…"}` are fetched with GET requests:
 
@@ -1088,7 +1188,7 @@ The pilot of a ship is `Captain`. Every other pilot, for example in `Crew` or a 
 - A failing request, an empty list or a `null` value stops the run. Nothing is invented.
 - Without `-base-url`, unresolved sources are reported as `SOURCE_UNRESOLVED` and the dictionary values are used.
 
-### 13.7 The dictionary
+### 13.8 The dictionary
 
 `global-dict.json` is the memory of the generator. Commit it: it makes the examples stable across runs, machines and spec regenerations. It is plain JSON with sorted keys, so it diffs well:
 
@@ -1118,9 +1218,10 @@ The pilot of a ship is `Captain`. Every other pilot, for example in `Crew` or a 
 - **`ref`** marks a field that holds another DTO, also when the spec writes it as `allOf: [{$ref: X}, {…extensions only}]`, and a DTO that is only an alias of another (`Vessel: {$ref: ShipWrite}`). The value is built from that DTO. A DTO that extends another with `allOf` and own fields gets its own `properties`.
 - **`paths`** keeps the values of generic path ids per path.
 - **Values from `defaults.json` are kept here** once they are applied (`DICT_FROM_DEFAULTS`, counted in the spec summary line as `dictionary values from defaults`). A field key like `"Pilot.Name"` or a plain key sets the `value` of each field it matched. `"#/components/schemas/Person"` sets the `value` of a free DTO, or passes its fields to the DTO's own fields (not into other DTOs it refers to). A parameter default sets the parameter's `value`. Keys of the form `"<operationId>.<name>"` are not kept: a dictionary node is shared by every operation. A second run with the same defaults reports nothing. Remove a default later and the dictionary keeps its last value, so the examples stay as they are; change the value in the dictionary or set a new default to change them.
+- **`records`** holds the start records of every resource (13.5), as the examples use them. They are written on every run; without `-base-url` they are reused, so the examples stay the same. The values of record `#1` are also set in the fields of the resource's DTOs.
 - Fields and parameters that disappear from the spec are dropped and reported as `REMOVED`.
 
-### 13.8 Verify before saving
+### 13.9 Verify before saving
 
 `apitest-gen` (apply) writes nothing until the result is checked. It writes the new spec into a temporary file next to the target, loads it the way apitest does, and goes through every entry of the defaults:
 
@@ -1130,6 +1231,13 @@ The pilot of a ship is `Captain`. Every other pilot, for example in `Crew` or a 
 | every binding is in the written spec (`x-apitest-bind` or a link) with that producer and pointer, and the pointer finds a value in the producer's example | `BIND_UNVERIFIED` |
 | every extension is set on its operation, with its value | `EXT_UNVERIFIED` |
 | every example that was written fits its schema; curated named examples are reported on their own | `EXAMPLE_SCHEMA` |
+| the cases of the written spec, built and ordered by apitest's code with `$apitest`, are played on the start records: every path parameter addresses a record, every update changes the record it addresses, and every read, list and response example shows the record as it is at that point | `EXAMPLE_STALE`, `PARAM_NO_RECORD` |
+
+The last check does not reuse how the examples were made: it takes the parameters and bodies apitest will send. So it finds the case of a GET after an update that still expects the old name:
+
+```text
+  EXAMPLE_STALE Book/GetBook/default expects Name = "Brazilian Book", but Book #1 has "Golden Book" at this point (changed by Book/UpdateBook/default)
+```
 
 With any problem, the problems are listed, the temporary file is removed, and the run exits with 1. **Nothing is written:** the spec, the dictionary and the defaults stay as they were.
 
@@ -1139,9 +1247,9 @@ verify: the defaults do not fit the written spec
 apitest-gen apply: verify: 1 problems; nothing was written, ../api/oapi.yaml and global-dict.json are unchanged
 ```
 
-Without problems it prints `verify: 18 defaults entries checked against the written spec, no problems` and saves. `-dry-run` runs the same checks and saves nothing either way. A default that violates a schema (`DEFAULT_INVALID`) stops the run even earlier, before the spec is composed.
+Without problems it prints `verify: 18 defaults entries and the examples of 2 resources checked against the written spec, no problems` and saves. `-dry-run` runs the same checks and saves nothing either way. A default that violates a schema (`DEFAULT_INVALID`) stops the run even earlier, before the spec is composed.
 
-### 13.9 Messages
+### 13.10 Messages
 
 Problems are always listed; messages marked *info* only with `-v`.
 
@@ -1162,7 +1270,7 @@ Problems are always listed; messages marked *info* only with `-v`.
 | `DEFAULTS_APPLIED` *info* | apply | defaults were set inside an existing or named example | – |
 | `EXAMPLE_INCOMPLETE` | apply | a required field or parameter has no value | set it in the defaults |
 | `EXTERNAL_REF` | apply | the target lives in another file | examples there are not written |
-| `SHARED_PARAM_CONFLICT` | apply, **stops** | a default for a parameter object shared by several operations or paths cannot be written | a binding (`review` proposes one), or define the parameter in the operation |
+| `SHARED_PARAM_CONFLICT` | apply, **stops** | a default for a parameter object shared by several operations or paths cannot be written | define the parameter in the operation, or remove the default: the records give the path its value |
 | `GENERIC_ID` *info* | apply | where the value of `{id}` came from | – |
 | `EXT_FROM_DEFAULTS` *info* | apply | an extension was set | – |
 | `BIND_WRITTEN` *info* | apply | a binding was written | – |
@@ -1178,12 +1286,30 @@ Problems are always listed; messages marked *info* only with `-v`.
 | `FATAL DEFAULT_INVALID` | apply | a default violates a schema; nothing written | fix or narrow the key |
 | `FATAL EXT_INVALID` | apply | an extension has the wrong type or belongs elsewhere | fix the value |
 | `FATAL BIND_INVALID` | apply | a binding names an unknown operation | fix the operationId |
+| `RECORD` | records | the records of a resource (keys) | – |
+| `SNAPSHOT` | records | records fetched from `-base-url` | – |
+| `SNAPSHOT_EMPTY` | records | a list returned nothing: the test starts without such records; or no list without own keys exists, the records are generated | add data, or set `$snapshot` |
+| `SNAPSHOT_WINS` | records | a field default is not used for a fetched record | remove the default, or change the data |
+| `UPDATE` *info* | records | an update changes a record: old and new values | – |
+| `CREATED_KEY` | records | the server assigns a key of a created record; the examples cannot know it | mark it `readOnly` or add it to `IgnoreFields` |
+| `PARAM_INLINED` | records | a shared parameter object was copied into a path to get its own example | – |
+| `MODEL` *info* | records | something the model could not decide, e.g. a parameter without resource | `$model` |
+| `FATAL SNAPSHOT_FAILED` | records | a request failed, a source does not fit, or a fetched element violates the schema | start the instance, fix `$snapshot`, the spec or the data |
+| `FATAL SNAPSHOT_SHORT` | records | fewer elements than `count` | add data or lower `count` |
+| `FATAL SNAPSHOT_MISMATCH` | records | two responses disagree about one record | the instance is inconsistent; add the field to `IgnoreFields` if it changes on purpose |
+| `FATAL SNAPSHOT_KEY` | records | the record a key default selects does not exist | correct the default or add the record |
+| `FATAL DEFAULT_CONFLICT` | records | two defaults set one key of a record differently | keep one |
+| `FATAL EXAMPLE_SHARED` | records | a shared parameter or response would need two examples | declare the parameter in each operation, or give the response its own object |
+| `FATAL EXAMPLE_INVALID` | records | a record value violates the schema of a place | fix the spec or the data |
+| `FATAL PLAN` | records | the cases cannot be ordered (unknown tag in `$apitest`, invalid binding) | fix `$apitest` or the spec |
+| `EXAMPLE_STALE` | verify, **stops** | an example does not show the record as it is at its case | report it; apply should never write one |
+| `PARAM_NO_RECORD` | verify, **stops** | a path parameter addresses no record | check the key defaults |
 | `NOT_BUILDABLE` | check | apitest could not send this case; the reason says which value is missing | `apitest-gen apply`, or a default |
 | `EXAMPLE_SCHEMA` | check | an example violates its schema | `apitest-gen apply` replaces it |
 | `BINDING` | check | `x-apitest-bind` or `links` are invalid | fix the spec |
 | `CASES` | check | cases cannot be built at all, e.g. duplicate names | fix the spec |
 
-### 13.10 Reviewing findings
+### 13.11 Reviewing findings
 
 After a test run, the report lists **spec findings** such as
 
@@ -1191,7 +1317,7 @@ After a test run, the report lists **spec findings** such as
 paths./ships/{id}/manifest.get.parameters[id]   parameter "id" is resolved heuristically from createShip (body /Id); make it explicit with x-apitest-bind or links
 ```
 
-`apitest-gen review` evaluates these findings, and everything else that would stop a case or an example, **before** the run. It writes real data into `defaults.json`: the bindings apitest would guess, bindings to list GETs, and the values used so far. No comments, no placeholders. You check that file. The next `apitest-gen` run takes the entries into the spec and the dictionary:
+A heuristic binding needs no fix: the generator gives the examples exactly the values apitest's heuristic takes (13.5), and no `links` are written. `apitest-gen review` evaluates everything that would stop a case or an example, **before** the run. It prints the resource model and writes real data into `defaults.json`: values and `$snapshot`. No bindings, no comments, no placeholders. You check that file. The next `apitest-gen` run takes the entries into the spec and the dictionary:
 
 ```sh
 apitest-gen review -spec openapi.yaml
@@ -1202,17 +1328,19 @@ apitest-gen -spec openapi.yaml
 The reasons are printed, not written; with `-v` one under each entry. `-dry-run` prints the result and writes nothing.
 
 ```text
-review: 8 suggestions; 3 defaults proposed, 2 values to choose, 1 defaults to correct, 1 fixed by apply, 1 to fix in the spec
-  DEFAULT  getManifest.id = {"bind":"createShip","pointer":"/Id"}  (heuristic at paths./ships/{id}/manifest.get.parameters[id])
-           → Makes the guess explicit; apply writes it as x-apitest-bind …
+model: 2 resources; the examples of each follow one record through the run
+  Dock: schemas DockRead, DockUpdate; keys Id, DockCode; list listDocks; read getDock; update updateDock
+  Ship: schemas Ship; keys Id; create createShip; read getShip, getManifest
+  ORDER                 the examples follow apitest's default order; if the test sets MethodOrder, DeleteLast or Tags, copy them into "$apitest" in defaults.json
+review: 7 suggestions; 2 defaults proposed, 2 values to choose, 1 defaults to correct, 1 fixed by apply, 1 to fix in the spec
   DEFAULT  getShip.x-apitest-forbidden = false  (auth at paths./ships/{id}.get.x-apitest-forbidden)
+  DEFAULT  $snapshot = {"Dock":{"count":1,"from":"listDocks"}}  (SNAPSHOT_SOURCE at model)
   CHOOSE   listDocks.zone  (NOT_BUILDABLE at paths./docks.get.parameters[zone]: no value for required parameter "zone" (query))
-  DEFAULT  GetBookById.id = {"bind":"GetBooks","pointer":"/0/Id"}  (LIST_BINDING at paths./Book/id/{id}.get.parameters[id])
   CHOOSE   /pilots/{id}  (GENERIC_ID at paths./pilots/{id}.get.parameters[id]: {id} has no binding and no default)
   EDIT     Pilot  (DEFAULT_UNUSED at defaults: "Pilot" matched no field; to set the DTO Pilot itself use the key "#/components/schemas/Pilot")
   APPLY    paths./ships/{id}.get.responses.200.content[application/json].example: example does not match the schema: …
   SPEC     paths./pilots/{id}.get.responses: the operation requires a token but documents neither 401 nor 403; …
-defaults.json: 4 entries added; check them, change or delete what is wrong, then run: apitest-gen -spec openapi.yaml
+defaults.json: 3 entries added; check them, change or delete what is wrong, then run: apitest-gen -spec openapi.yaml
 ```
 
 **Kinds of fixes:**
@@ -1229,8 +1357,8 @@ defaults.json: 4 entries added; check them, change or delete what is wrong, then
 
 | Finding | Source | Fix |
 |---|---|---|
-| `heuristic`: a parameter resolved heuristically | apitest report | `DEFAULT` `"<operationId>.<param>": {"bind": "<producer>", "pointer": "/Id"}` (or `"header"`, `"request": true`), exactly the binding apitest guessed. `apply` writes it as `x-apitest-bind`, or as a link on the producer for a shared parameter. Without operationIds: `SPEC`. |
-| a path parameter without producer, e.g. no POST creates the resource | `review` | `DEFAULT` `"<operationId>.<param>": {"bind": "<GET list>", "pointer": "/0/<Field>"}` (`LIST_BINDING`): a GET that lists the resource of the parameter (`GET /Book` for `/Book/id/{id}` and `/Book/{Code}`, a list of Articles for `/…/Article/id/{id}`) and whose elements have the field (`Id` for a generic id, else the parameter name). The GET with the fewest path parameters wins; a binding that would close a cycle is not proposed. Not proposed if the defaults already set the parameter. |
+| `heuristic`: a parameter resolved heuristically | apitest report | nothing: the examples follow the heuristic (13.5) |
+| the resources of the spec | `review` | `DEFAULT` `"$snapshot"` with the list each resource is fetched from, if the defaults have none (`SNAPSHOT_SOURCE`); `ORDER` if `"$apitest"` is missing |
 | `binding`: a link to an unknown operation or parameter | apitest report | `SPEC`, with the closest operationId (`did you mean "getDock"?`) |
 | `auth`: `x-apitest-forbidden` without a 403 response | apitest report | `DEFAULT` `"<operationId>.x-apitest-forbidden": false`, or document a 403 |
 | `auth`: a secured operation without 401 or 403 | apitest report | `SPEC` with the response to add, or `Config.SkipAuthCases` |
@@ -1240,12 +1368,12 @@ defaults.json: 4 entries added; check them, change or delete what is wrong, then
 | `validation`: conflicting paths | apitest report | `SPEC` |
 | `NOT_BUILDABLE`: a required parameter without value | `check` | `APPLY` if the dictionary has a value, otherwise `CHOOSE` `"<operationId>.<param>"` with type, format, pattern and enum |
 | `NOT_BUILDABLE`: a body without example, an unsupported media type | `check` | `APPLY` or `SPEC` |
-| `GENERIC_ID`: `{id}` without binding and without default | apply | `CHOOSE` `"/path/{id}": <the id used so far>`: replace it with an id that exists in the environment |
+| `GENERIC_ID`: `{id}` without binding, without default and without record | apply | `CHOOSE` `"/path/{id}": <the id used so far>`: replace it with an id that exists in the environment. Not proposed for a parameter that holds a record key. |
 | `NO_VALUE`, `PATTERN_PENDING`, `TYPE_CONFLICT` | dictionary | `CHOOSE`, printed: add `"Dto.Field"` or `"#/components/schemas/Dto"` with a value |
 | `VALUE_INVALID` | dictionary | `APPLY` with `-repair`, or correct the value |
 | `EXAMPLE_INCOMPLETE` | apply | `CHOOSE` for the field without value, or `SPEC` for a cycle or contradiction |
 | `DEFAULT_INVALID`, `EXT_INVALID`, `BIND_INVALID`, `DEFAULT_UNUSED` | apply | `EDIT`: the entry and the key to use instead |
-| `SHARED_PARAM_CONFLICT`: a parameter object shared by several paths (`$ref: '#/components/parameters/id'`) has one example, so `"/Book/id/{id}": 1` and `"/Article/id/{id}": 10` cannot both be written | apply | a `LIST_BINDING` if there is a list GET, otherwise `SPEC`: define the parameter in the operation. A bound parameter needs no path value; its path key is then reported as not needed (`-v`). |
+| `SHARED_PARAM_CONFLICT`: an operation default for a parameter object shared by several operations | apply | `EDIT`: remove it; the records give each path its value, and apitest-gen copies a shared parameter into the path when needed (13.5) |
 | `BIND_NOT_WRITTEN`, `EXTERNAL_REF` | apply | `SPEC` |
 
 The Swagger 2.0 conversion note needs no fix and is not listed.
@@ -1255,9 +1383,8 @@ The Swagger 2.0 conversion note needs no fix and is not listed.
 ```json
 {
   "PilotEmail": "test@starport.example",
-  "getManifest.id": { "bind": "createShip", "pointer": "/Id" },
-  "GetBookById.id": { "bind": "GetBooks", "pointer": "/0/Id" },
   "getShip.x-apitest-forbidden": false,
+  "$snapshot": { "Dock": { "from": "listDocks", "count": 1 } },
   "/pilots/{id}": 275
 }
 ```
@@ -1272,14 +1399,16 @@ The Swagger 2.0 conversion note needs no fix and is not listed.
 **Review workflow:**
 
 1. Run `apitest-gen review -spec openapi.yaml` (with `-v` for the reasons).
-2. Open `defaults.json` and check the new entries at the end, above all the bindings: does the producer really return the value the parameter means? A binding to a list takes its first element; filter with `/[Active=true]/Id` if it must be a particular one. Replace fixed ids with ids that exist. Delete what is wrong and add its key to `$rejected`.
-3. Fix what was printed as `EDIT` and `SPEC`.
-4. Run `apitest-gen -spec openapi.yaml`. It updates `global-dict.json` and writes examples, bindings (`x-apitest-bind` or links) and extensions into the spec.
-5. Run `review` again. When nothing is open, it prints `nothing to review`.
+2. Check the model `review` printed. Correct it with `"$model"` if a resource, a key or a role is wrong. Copy `MethodOrder`, `DeleteLast` and `Tags` of your test into `"$apitest"`.
+3. Open `defaults.json` and check the new entries at the end: the lists in `$snapshot` and their `count`, the values. Replace fixed ids with ids that exist. Delete what is wrong and add its key to `$rejected`.
+4. Fix what was printed as `EDIT` and `SPEC`.
+5. Run `apitest-gen -spec openapi.yaml -base-url <instance>` (or without `-base-url` for generated records). It updates `global-dict.json` and writes examples and extensions into the spec.
+6. Run `review` again. When nothing is open, it prints `nothing to review`.
 
-### 13.11 Using the results in apitest
+### 13.12 Using the results in apitest
 
 - **Same keys.** The keys of `defaults.json` work the same way as `Config.Params` (`"name"` and `"<operationId>.<name>"`). `check` uses the plain values of the defaults like `Config.Params`, so you can also pass them to apitest instead of writing them into the spec.
 - **One spec per environment.** Write environment values into a copy (`-out openapi.qa.yaml`) and point `Config.SpecPath` to it.
-- **Comparing generated examples.** Generated examples describe valid data, not the data of your environment. Against shared environments use `CompareMode: apitest.CompareSchema`. In-process tests, where the cases create their own data, can keep the default `subset` comparison.
+- **Comparing examples.** With `-base-url` the examples show the data of the instance, in the state each case meets them, so the default `subset` comparison works for an integration test against a seeded database (a test container). Generated records describe valid data, not the data of your environment: against shared environments without a snapshot use `CompareMode: apitest.CompareSchema`. In-process tests, where the cases create their own data, can keep `subset`.
+- **Same order.** `"$apitest"` in the defaults must match `MethodOrder`, `DeleteLast` and `Tags` of the test.
 - **Run `check` in CI** before the tests. It fails as soon as a spec change leaves a case without a value.

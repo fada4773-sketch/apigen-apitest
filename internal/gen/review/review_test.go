@@ -11,6 +11,7 @@ import (
 	"github.com/fada4773-sketch/apigen-apitest/internal/gen/apply"
 	"github.com/fada4773-sketch/apigen-apitest/internal/gen/defaults"
 	"github.com/fada4773-sketch/apigen-apitest/internal/gen/dict"
+	"github.com/fada4773-sketch/apigen-apitest/internal/gen/model"
 	"github.com/fada4773-sketch/apigen-apitest/internal/gen/yamldoc"
 	"github.com/fada4773-sketch/apigen-apitest/internal/spec"
 )
@@ -48,7 +49,6 @@ func find(r *Result, action, contains string) *Suggestion {
 func TestReviewProposesFixes(t *testing.T) {
 	r := review(t, `{"Dock": {"DockCode": "x"}}`)
 	for _, c := range []struct{ action, contains, key string }{
-		{ActionDefault, "getDock.dockCode", "getDock.dockCode"},                       // heuristic binding
 		{ActionDefault, "getDock.x-apitest-forbidden", "getDock.x-apitest-forbidden"}, // no 403
 		{ActionChoose, "listDocks.zone", "listDocks.zone"},                            // NOT_BUILDABLE, pattern unsolved
 		{ActionChoose, "/pilots/{id}", "/pilots/{id}"},                                // generic id without producer
@@ -68,12 +68,11 @@ func TestReviewProposesFixes(t *testing.T) {
 			t.Errorf("%s %q: key %q, want %q", c.action, c.contains, s.Key, c.key)
 		}
 	}
+	// a heuristic binding needs no entry: the examples follow it
 	if b := find(r, ActionDefault, "getDock.dockCode"); b != nil {
-		if got, _ := json.Marshal(b.Value); string(got) != `{"bind":"createDock","pointer":"/DockCode"}` {
-			t.Errorf("binding: %s", got)
-		}
+		t.Errorf("heuristic binding proposed: %+v", b)
 	}
-	if n := len(r.Suggestions); n > 11 {
+	if n := len(r.Suggestions); n > 10 {
 		for _, s := range r.Suggestions {
 			t.Logf("%s %s %s: %s", s.Action, s.Key, s.Where, s.Message)
 		}
@@ -92,9 +91,9 @@ func TestReviewSkipsKnownKeys(t *testing.T) {
 	}
 }
 
-// review writes data only into defaults.json: proposed bindings and
-// values, and for values only the user knows the value used so far. No
-// comments, no null. A second run proposes nothing twice.
+// review writes data only into defaults.json: proposed values, and for
+// values only the user knows the value used so far. No comments, no null,
+// no bindings. A second run proposes nothing twice.
 func TestReviewUpdatesDefaults(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "defaults.json")
 	r := review(t, `{}`)
@@ -112,8 +111,8 @@ func TestReviewUpdatesDefaults(t *testing.T) {
 	if defs.Plain("/pilots/{id}") == nil {
 		t.Errorf("the generated id is not written:\n%s", b)
 	}
-	if defs.Plain("getDock.dockCode") != nil || defs.Binding("getDock", "dockCode") == nil {
-		t.Errorf("binding missing:\n%s", b)
+	if len(defs.Bindings()) > 0 || defs.Plain("getDock.x-apitest-forbidden") == nil {
+		t.Errorf("a binding written or the extension missing:\n%s", b)
 	}
 	if defs.IsTodo("listDocks.zone") || strings.Contains(string(b), "listDocks.zone") {
 		t.Errorf("a value nobody knows is written:\n%s", b)
@@ -142,9 +141,10 @@ func TestClosest(t *testing.T) {
 	}
 }
 
-// Without POSTs, path parameters are bound to the first element of a list
-// GET of their resource.
-func TestReviewListBindings(t *testing.T) {
+// With the resource model, path parameters that hold record keys get their
+// examples from the records: no bindings, no ids to choose; "$snapshot"
+// names the lists the records are fetched from.
+func TestReviewModel(t *testing.T) {
 	const path = "../../../testdata/gen/lists.yaml"
 	s, err := spec.Load(context.Background(), path)
 	if err != nil {
@@ -158,25 +158,21 @@ func TestReviewListBindings(t *testing.T) {
 	}
 	ids := []string{"id"}
 	res := apply.Apply(doc, s, d, defs, apply.Options{Seed: 1, GenericIDs: ids})
-	r := Run(Input{Spec: s, Dict: d, DictNotes: notes, Defaults: defs, GenericIDs: ids, Apply: res})
-	want := map[string]string{
-		"getPlanetById.id":     `{"bind":"listPlanets","pointer":"/0/Id"}`,
-		"getPlanet.Code":       `{"bind":"listPlanets","pointer":"/0/Code"}`,
-		"listMoonsOfPlanet.id": `{"bind":"listPlanets","pointer":"/0/Id"}`,
-		"getMoon.Code":         `{"bind":"listPlanets","pointer":"/0/Code"}`,
-		"getMoon.id":           `{"bind":"listMoonsOfPlanet","pointer":"/0/Id"}`,
-	}
+	r := Run(Input{Spec: s, Dict: d, DictNotes: notes, Defaults: defs, GenericIDs: ids, Apply: res, Model: model.Detect(s, nil)})
 	got := map[string]string{}
 	for _, p := range r.Changes() {
 		b, _ := json.Marshal(p.Value)
 		got[p.Key] = string(b)
 	}
-	for k, v := range want {
-		if got[k] != v {
-			t.Errorf("%s: got %s, want %s", k, got[k], v)
-		}
-	}
-	if len(got) != len(want) {
+	want := map[string]string{defaults.SnapshotKey: `{"Moon":{"count":1,"from":"listMoonsOfPlanet"},"Planet":{"count":1,"from":"listPlanets"}}`}
+	if len(got) != len(want) || got[defaults.SnapshotKey] != want[defaults.SnapshotKey] {
 		t.Errorf("got %v", got)
+	}
+
+	// with "$snapshot" in the defaults nothing is proposed
+	defs, _ = defaults.Parse([]byte(`{"$snapshot": {"Planet": {"from": "listPlanets"}}}`))
+	r = Run(Input{Spec: s, Dict: d, DictNotes: notes, Defaults: defs, GenericIDs: ids, Apply: res, Model: model.Detect(s, nil)})
+	if n := len(r.Changes()); n != 0 {
+		t.Errorf("%d changes", n)
 	}
 }

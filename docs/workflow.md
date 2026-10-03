@@ -11,51 +11,61 @@ Every flag and every key used here is described in [configuration.md](configurat
 
 ```sh
 apitest-gen review -spec openapi.yaml
-# now open defaults.json, check the new entries, change or delete what is wrong
-apitest-gen -spec openapi.yaml
+# now check the model and defaults.json; copy MethodOrder/DeleteLast/Tags of the test into "$apitest"
+apitest-gen -spec openapi.yaml -base-url http://localhost:8080
 apitest-gen review -spec openapi.yaml
 ```
 
 | Command | What it does |
 |---|---|
-| `apitest-gen review -spec openapi.yaml` | Finds everything apitest would report and **writes real data into `defaults.json`**: the bindings apitest would guess, bindings to list GETs, and the ids used so far. No comments, no placeholders. Creates the file if it does not exist. Changes neither the spec nor the dictionary. The reasons are printed, with `-v` one per entry. |
-| *you* | Check the new entries at the end of `defaults.json`. That is the only file you edit. |
-| `apitest-gen -spec openapi.yaml` | Updates `global-dict.json` and writes the examples, bindings and extensions from `defaults.json` into `openapi.yaml`. Before saving, it checks every entry of `defaults.json` against the new spec (`verify`): a wrong pointer, a key that matches nothing or a binding that cannot be written stops the run, and **nothing is changed**. Creates `global-dict.json` and `defaults.json` if they are missing. |
+| `apitest-gen review -spec openapi.yaml` | Prints the **resource model** (which DTOs, keys and operations belong to `Book`, `Article`, …) and finds everything apitest would report. It **writes real data into `defaults.json`**: the lists the records are fetched from (`$snapshot`) and the ids used so far. No bindings, no comments, no placeholders. Creates the file if it does not exist. Changes neither the spec nor the dictionary. The reasons are printed, with `-v` one per entry. |
+| *you* | Check the model and the new entries at the end of `defaults.json`. That is the only file you edit. |
+| `apitest-gen -spec openapi.yaml -base-url <instance>` | Updates `global-dict.json` and writes the examples and extensions into `openapi.yaml`. Every resource gets records, fetched from the running instance (GET only) or, without `-base-url`, generated. The cases are played in apitest's order: an update changes the record, and every example shows the record as it is at its case. Before saving, it plays the written spec again and checks every example and every entry of `defaults.json` (`verify`); with a problem **nothing is changed**. Creates `global-dict.json` and `defaults.json` if they are missing. |
 | `apitest-gen review -spec openapi.yaml` | Again, to see what is still open. Only problems the defaults cannot solve are left, such as a missing 401 in the spec. |
 
 `-dict global-dict.json` and `-defaults defaults.json` are the defaults, so you do not need to type them.
 
-**What `review` writes,** for a spec with `GET /Book` (a list), `GET /Book/id/{id}`, `GET /Book/{Code}` and `GET /Book/{Code}/Article/id/{id}`:
+**What `review` writes,** for a spec with `GET /Book` (a list), `GET /Book/id/{id}`, `GET /Book/{Code}`, `PUT /Book/{Code}` and `GET /Book/{Code}/Article`:
 
 ```json
 {
-  "GetBookById.id":  { "bind": "GetBooks", "pointer": "/0/Id" },
-  "GetBook.Code":    { "bind": "GetBooks", "pointer": "/0/Code" },
-  "GetArticle.Code": { "bind": "GetBooks", "pointer": "/0/Code" },
-  "GetArticle.id":   { "bind": "GetArticlesOfBook", "pointer": "/0/Id" },
-  "/Author/id/{id}": 275
+  "$snapshot": {
+    "Article": { "count": 1, "from": "GetArticles" },
+    "Book":    { "count": 1, "from": "GetBooks" }
+  }
 }
 ```
 
-| Entry | Comes from | apitest at run time |
-|---|---|---|
-| `{"bind": "<POST>", "pointer": "/Id"}` | the guess apitest makes from a POST that returns the field | takes the value from the response of the POST |
-| `{"bind": "<GET list>", "pointer": "/0/Id"}` | a GET that lists the resource of the path parameter: `/Book` for `/Book/id/{id}`, a list of Articles for `/…/Article/id/{id}`. Used where no POST creates the resource, typically against an environment with data. | takes the value from the first element the GET returns |
-| `"/path/{id}": 275` | an id without producer; the value the generator used so far | uses the value as it is; replace it with an id that exists |
-| `"<operationId>.x-apitest-forbidden": false` | `x-apitest-forbidden` without a 403 response | does not run the forbidden case |
+and what you add by hand:
+
+```json
+{
+  "$apitest": { "MethodOrder": ["POST", "PUT", "GET", "DELETE"], "DeleteLast": true }
+}
+```
+
+| Entry | Meaning |
+|---|---|
+| `"$snapshot"` | the list each resource's records come from with `-base-url`; `count` elements become records and appear in the list examples |
+| `"$apitest"` | the same `MethodOrder`, `DeleteLast` and `Tags` as in `apitest.Config`. With `PUT` before `GET`, the GETs expect what the PUTs sent. |
+| `"$model"` | only if `review` shows a resource, key or role wrongly |
+| `"/path/{id}": 275` | an id no record and no producer provides; the value the generator used so far. Replace it with one that exists. |
+| `"<operationId>.x-apitest-forbidden": false` | `x-apitest-forbidden` without a 403 response |
 
 **Review rules:**
 
 | You see | Do this |
 |---|---|
-| a binding | Does the operation really get this parameter from that field of that producer? If yes, leave it. If not, change `bind` or `pointer`, or delete it. |
-| a binding to `/0/…` of a list | The first element is used. If it must be a particular one, filter: `"pointer": "/[Active=true]/Id"`. |
+| the model | Does every resource have the right DTOs and keys? Correct it with `"$model": {"Book": {"keys": [...]}}`. |
+| `ORDER` | Copy `MethodOrder`, `DeleteLast` and `Tags` of your test into `"$apitest"`. If they differ, the examples follow another order than the run. |
+| `$snapshot` | Is it the right list? Raise `count` for more list elements. |
 | a fixed id (`"/path/{id}": 275`) | Replace it with an id that exists in the test environment, or delete it. |
 | a proposal you deleted | Add its key to `"$rejected": ["GetBook.Code"]`, so `review` does not propose it again. |
 | a problem printed as `SPEC` | Only a change of `openapi.yaml` helps, e.g. a missing 401. Do it by hand. |
 
-- **Never keep a binding unchecked.** It is a guess from names. A wrong one does not fail loudly: the case just uses the wrong value.
-- **Response examples follow the path.** For `/Book/id/{id}` with the example `100`, the response example of `BookRead` gets `Id: 100`. For `/Book/id/{id}/Article`, the Articles get `BookId: 100`. If the value comes from `defaults.json`, `global-dict.json` keeps it in the DTO field too.
+- **No bindings, no links.** apitest finds the producer of an id by itself (its heuristic). The examples get exactly the values it will use, so the spec keeps only examples.
+- **Updates are tested.** A PUT sends new values; the GETs after it expect them. After each PUT apitest also reads the resource and checks that it was stored.
+- **The instance must hold the test data.** For an integration test with a test container, run `apitest-gen -base-url` against an instance with the same seed.
 
 ## Contents
 
@@ -265,8 +275,8 @@ Generated values are fine for everything the test creates itself. They are not f
   "scrapShip.x-apitest-verify": { "poll": true, "timeout": "20s" },
   "listDocks.x-apitest-compare": "schema",
 
-  "$comment_bindings": "where apitest takes path values from",
-  "bookDock.dockCode": { "bind": "listDocks", "pointer": "/0/DockCode" }
+  "$comment_order": "the same order as apitest.Config of the test",
+  "$apitest": { "DeleteLast": true }
 }
 ```
 
@@ -277,10 +287,13 @@ apitest-gen -spec ../api/openapi.yaml -dict global-dict.json -defaults defaults.
 `-v` (verbose) also lists every change and, at the end, at how many places each default matched. The count is the same on every run, also when nothing changes: it counts the places, not the writes. Whether something was written is shown by the summary line (`4 with defaults`) and the `DEFAULTS_APPLIED` lines. Without it apitest-gen prints only the summary lines and the problems.
 
 ```text
-spec ../api/openapi.yaml: 0 examples added, 0 replaced, 4 with defaults, 5 kept, 0 incomplete; 2 extensions, 1 bindings; 0 dictionary values from defaults
+spec ../api/openapi.yaml: 0 examples added, 0 replaced, 4 with defaults, 5 kept, 0 incomplete; 2 extensions, 0 bindings; 0 dictionary values from defaults
   DEFAULTS_APPLIED      paths./ships.post.requestBody.content[application/json]: {"CargoTons":212.4,"Callsign":"TQ7KR2","Class":"shuttle",…}
   EXT_FROM_DEFAULTS     paths./ships/{id}.delete: x-apitest-verify: {"poll":true,"timeout":"20s"}
-  BIND_WRITTEN          paths./docks/{dockCode}/bookings.post.parameters[dockCode]: x-apitest-bind: {"from":"listDocks","pointer":"/0/DockCode"}
+records: 2 resources, 2 records (generated); 1 updates on the way; 7 examples from the records, 0 parameters copied into their path
+  RECORD                Dock: #1 DockCode="KD-418"
+  RECORD                Ship: #1 Id=412
+  UPDATE                paths./ships/{id}.put: Ship/updateShip/default changes Ship created by registerShip: Name "Integration Test Ship" → "Renamed Test Ship"
 defaults matched (places in the spec this run, also where the value is already there):
   PilotEmail: 3
   Class: 3
@@ -288,11 +301,10 @@ defaults matched (places in the spec this run, also where the value is already t
   updateShip.Name: 1
   scrapShip.x-apitest-verify: 1
   listDocks.x-apitest-compare: 1
-  bookDock.dockCode: 1
 check: 23 of 23 cases can be sent, 0 problems
 ```
 
-- The binding makes apitest take the dock code from the first dock that `listDocks` returns, so the test never depends on one fixed code.
+- The examples of docks and ships follow one record each through the run (see [configuration.md, 13.5](configuration.md#135-records-examples-that-follow-the-data)). `updateShip` sends `Renamed Test Ship`. The test below keeps apitest's default order, so `getShip` runs before the update and expects the name `registerShip` sent; with `MethodOrder: POST, PUT, GET, DELETE` in the Config and in `$apitest` it would expect the new name. `bookDock` gets the code of the dock record in its path.
 - A default that violates a schema stops the run **before anything is written**:
 
   ```text
@@ -372,34 +384,22 @@ paths./ships/{id}.put.parameters[id]      parameter "id" is resolved heuristical
 paths./ships/{id}.delete.parameters[id]   parameter "id" is resolved heuristically from registerShip (body /Id); make it explicit with x-apitest-bind or links
 ```
 
-You don't have to fix these by hand. `review` evaluates every finding and writes the fix into `defaults.json`:
+These need no fix: apitest binds the id to `registerShip` at run time, and the examples already show the ship `registerShip` creates, in the state each case meets it. `review` confirms that nothing is open:
 
 ```sh
 apitest-gen review -spec ../api/openapi.yaml
 ```
 
 ```text
-review: 3 suggestions; 3 defaults proposed, 0 values to choose, 0 defaults to correct, 0 fixed by apply, 0 to fix in the spec
-  DEFAULT  getShip.id = {"bind":"registerShip","pointer":"/Id"}  (heuristic at paths./ships/{id}.get.parameters[id])
-  DEFAULT  updateShip.id = {"bind":"registerShip","pointer":"/Id"}  (heuristic at paths./ships/{id}.put.parameters[id])
-  DEFAULT  scrapShip.id = {"bind":"registerShip","pointer":"/Id"}  (heuristic at paths./ships/{id}.delete.parameters[id])
-defaults.json: 3 entries added; check them, change or delete what is wrong, then run: apitest-gen -spec ../api/openapi.yaml
-```
-
-The three bindings are now at the end of `defaults.json`. Check them: `registerShip` returns the new ship with its `Id`, so they are right. Leave them and run:
-
-```sh
-apitest-gen -spec ../api/openapi.yaml
-apitest-gen review -spec ../api/openapi.yaml
-```
-
-```text
+model: 2 resources; the examples of each follow one record through the run
+  Dock: schemas Dock; keys DockCode; list listDocks; read getDock
+  Ship: schemas ShipRead, ShipWrite; keys Id; create registerShip; read getShip; update updateShip; delete scrapShip
 review: 0 suggestions; 0 defaults proposed, 0 values to choose, 0 defaults to correct, 0 fixed by apply, 0 to fix in the spec
 nothing to review
 defaults.json: nothing added
 ```
 
-The bindings are now `x-apitest-bind` entries in the spec, so the next report has no spec findings. They also stay in `defaults.json`, so they survive a regenerated spec. All kinds of findings and their fixes: [configuration.md, 13.10](configuration.md#1310-reviewing-findings).
+To make a binding explicit anyway (for example to take an id from another operation than the one apitest guesses), add `"getShip.id": {"bind": "registerShip", "pointer": "/Id"}` to `defaults.json`; the next `apitest-gen` run writes it into the spec. All kinds of findings and their fixes: [configuration.md, 13.11](configuration.md#1311-reviewing-findings).
 
 ## 7. Step 5: test against QA
 
@@ -435,7 +435,7 @@ apitest-gen -spec ../api/openapi.yaml -out ../api/openapi.qa.yaml \
   -dict global-dict.json -defaults defaults.json,defaults.qa.resolved.json -check
 ```
 
-Later files override earlier ones. Discovery and generation also work in one step with `-base-url`, then the values are fetched in memory and no file is written.
+Later files override earlier ones. Discovery and generation also work in one step with `-base-url`, then the values are fetched in memory and no file is written. With `-base-url` the records come from QA too: the examples show the docks and ships QA has (`$snapshot` says from which lists). Data on QA change while others use it, so the QA test below still compares only the schema.
 
 ```go
 func TestStarportQA(t *testing.T) {

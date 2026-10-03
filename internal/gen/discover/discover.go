@@ -133,6 +133,22 @@ func fill(e *defaults.Entry, defs *defaults.Defaults) (string, error) {
 }
 
 func fetch(ctx context.Context, opt Options, path, pick string) (any, error) {
+	doc, err := Get(ctx, opt, path)
+	if err != nil {
+		return nil, err
+	}
+	return Pick(doc, pick)
+}
+
+// Get sends GET <BaseURL><path> and returns the decoded JSON body; numbers
+// stay json.Number. A status other than 2xx is an error.
+func Get(ctx context.Context, opt Options, path string) (any, error) {
+	if opt.Client == nil {
+		opt.Client = &http.Client{}
+	}
+	if opt.Timeout == 0 {
+		opt.Timeout = 10 * time.Second
+	}
 	ctx, cancel := context.WithTimeout(ctx, opt.Timeout)
 	defer cancel()
 	target := strings.TrimSuffix(opt.BaseURL, "/") + "/" + strings.TrimPrefix(path, "/")
@@ -166,7 +182,7 @@ func fetch(ctx context.Context, opt Options, path, pick string) (any, error) {
 	if err := dec.Decode(&doc); err != nil {
 		return nil, fmt.Errorf("response is not JSON: %w", err)
 	}
-	return Pick(doc, pick)
+	return doc, nil
 }
 
 // Pick selects a value with a JSON pointer whose segments may also be

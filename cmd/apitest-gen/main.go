@@ -25,7 +25,9 @@ import (
 	"github.com/fada4773-sketch/apigen-apitest/internal/gen/defaults"
 	"github.com/fada4773-sketch/apigen-apitest/internal/gen/dict"
 	"github.com/fada4773-sketch/apigen-apitest/internal/gen/discover"
+	"github.com/fada4773-sketch/apigen-apitest/internal/gen/model"
 	"github.com/fada4773-sketch/apigen-apitest/internal/gen/review"
+	"github.com/fada4773-sketch/apigen-apitest/internal/gen/scenario"
 	"github.com/fada4773-sketch/apigen-apitest/internal/gen/yamldoc"
 	"github.com/fada4773-sketch/apigen-apitest/internal/spec"
 )
@@ -41,8 +43,12 @@ Usage:
 
 Commands:
   apply     (default) update the dictionary, then write missing or invalid
-            examples into the spec, in place unless -out is set; with
-            -base-url the sources in the defaults are fetched first
+            examples into the spec, in place unless -out is set; the
+            examples of every resource follow one record through the run
+            in apitest's order ("$apitest" in the defaults); with -base-url
+            the records and the sources in the defaults are fetched from a
+            running instance (GET only); nothing is saved unless the
+            written spec passes verify
   dict      only create or update the dictionary
   discover  fetch the sources in the defaults ({"from": "GET …", "pick": …})
             from a running environment and write the values to -out;
@@ -50,11 +56,11 @@ Commands:
   check     report what keeps apitest from running the spec: cases that
             would be NOT_BUILDABLE and examples that violate their schema;
             exit code 1 if there is any (for CI)
-  review    evaluate what apitest would report (spec findings such as
-            heuristic bindings, cases it cannot send, values the generator
-            cannot create) and propose a fix for each; the proposals are
-            added to the defaults file (created if missing) with a "$review"
-            block; check them, then run apply
+  review    show the resource model and evaluate what apitest would
+            report (spec findings, cases it cannot send, values the
+            generator cannot create); the fixes are added as data to the
+            defaults file (created if missing): values and "$snapshot";
+            check them, then run apply
   help      show this help
 
 Flags:
@@ -142,7 +148,7 @@ func flags(name string, out io.Writer) (*flag.FlagSet, *options) {
 		o.out = "defaults.resolved.json"
 	}
 	fs.StringVar(&o.out, "out", o.out, outHelp)
-	fs.StringVar(&o.baseURL, "base-url", "", "environment to fetch sources from, e.g. https://api.qa.example/v1")
+	fs.StringVar(&o.baseURL, "base-url", "", "running instance to fetch the records (apply) and the sources from, e.g. http://localhost:8080/api")
 	fs.StringVar(&o.tokenEnv, "token-env", "", "environment variable holding a bearer token for -base-url")
 	fs.Var(&o.headers, "header", `extra header for -base-url, "Name: value"; repeatable`)
 	fs.Uint64Var(&o.seed, "seed", 42, "seed for generated values; the same seed gives the same values")
@@ -200,6 +206,7 @@ func execute(o *options, out io.Writer) error {
 		Seed:       o.seed,
 		Overwrite:  o.overwrite,
 		GenericIDs: strings.Split(o.genericIDs, ","),
+		RecordKey:  recordKey(model.Detect(s, defs.Model)),
 	})
 	target := o.spec
 	if o.out != "" {
@@ -224,21 +231,31 @@ func execute(o *options, out io.Writer) error {
 		}
 		return fmt.Errorf("%d problems with the defaults; nothing was written", len(res.Fatal))
 	}
+	// the examples of each resource follow one record through the run
+	sres, err := records(o, doc, target, d, defs, out)
+	if err != nil {
+		return err
+	}
+	if sres.Changed {
+		res.Changed = true
+	}
 	// write the spec next to its target, load it the way apitest does and
-	// check every entry of the defaults against it; only then save anything
+	// check every entry of the defaults and every example against it; only
+	// then save anything
 	tmp, written, err := stageSpec(doc, target)
 	if err != nil {
 		return err
 	}
 	defer os.Remove(tmp)
-	if problems := apply.Verify(written, defs, res); len(problems) > 0 {
+	problems := append(apply.Verify(written, defs, res), scenario.Verify(written, defs, sres.Records)...)
+	if len(problems) > 0 {
 		fmt.Fprintln(out, "verify: the defaults do not fit the written spec")
 		for _, p := range problems {
 			fmt.Fprintf(out, "  %s\n", p)
 		}
 		return fmt.Errorf("verify: %d problems; nothing was written, %s and %s are unchanged", len(problems), target, o.dict)
 	}
-	fmt.Fprintf(out, "verify: %d defaults entries checked against the written spec, no problems\n", defs.Len())
+	fmt.Fprintf(out, "verify: %d defaults entries and the examples of %d resources checked against the written spec, no problems\n", defs.Len(), sres.Stats.Resources)
 	if o.dryRun {
 		fmt.Fprintln(out, "dry run: nothing written")
 		return nil
@@ -270,6 +287,55 @@ func execute(o *options, out io.Writer) error {
 	}
 	return nil
 }
+
+// records stages the spec as apply wrote it, detects the resources and
+// makes their examples follow one record each through the run: fetched from
+// -base-url, or generated. Problems stop the run before anything is saved.
+func records(o *options, doc *yamldoc.Doc, target string, d *dict.Dict, defs *defaults.Defaults, out io.Writer) (*scenario.Result, error) {
+	tmp, mid, err := stageSpec(doc, target)
+	if err != nil {
+		return nil, err
+	}
+	os.Remove(tmp)
+	in := scenario.Input{Doc: doc, Spec: mid, Dict: d, Defaults: defs, Model: model.Detect(mid, defs.Model), Seed: o.seed}
+	if o.baseURL != "" {
+		opt, err := discoverOptions(o)
+		if err != nil {
+			return nil, err
+		}
+		in.Fetch = func(ctx context.Context, path string) (any, error) { return discover.Get(ctx, opt, path) }
+	}
+	res := scenario.Run(context.Background(), in)
+	source := "generated"
+	if in.Fetch != nil {
+		source = fmt.Sprintf("snapshot of %s, %d GET requests", o.baseURL, res.Stats.Fetched)
+	}
+	fmt.Fprintf(out, "records: %d resources, %d records (%s); %d updates on the way; %d examples from the records, %d parameters copied into their path\n",
+		res.Stats.Resources, res.Stats.Records, source, res.Stats.Updates, res.Stats.Examples, res.Stats.Inlined)
+	for _, n := range res.Notes {
+		if o.verbose || !quietRecord[n.Code] {
+			fmt.Fprintf(out, "  %-21s %s: %s\n", n.Code, n.Where, n.Message)
+		}
+	}
+	if len(res.Problems) > 0 {
+		for _, p := range res.Problems {
+			fmt.Fprintf(out, "  FATAL %s %s: %s\n", p.Code, p.Where, p.Message)
+		}
+		return nil, fmt.Errorf("records: %d problems; nothing was written", len(res.Problems))
+	}
+	return res, nil
+}
+
+// recordKey reports the path parameters that hold a record key.
+func recordKey(m *model.Model) func(*spec.Operation, string) bool {
+	return func(op *spec.Operation, param string) bool {
+		o := m.Op(op)
+		return o != nil && o.Param(param) != nil
+	}
+}
+
+// quietRecord notes are only listed with -v.
+var quietRecord = map[string]bool{scenario.CodeUpdate: true, scenario.CodeModel: true}
 
 // checkCommand runs "apitest-gen check"; exit code 1 means problems.
 func checkCommand(o *options, stdout, stderr io.Writer) int {
@@ -312,14 +378,28 @@ func reviewCommand(o *options, out io.Writer) error {
 	}
 	ids := strings.Split(o.genericIDs, ",")
 	// apply in memory only: its problems are reviewed, nothing is saved
-	applied := apply.Apply(doc, s, d, defs, apply.Options{Seed: o.seed, GenericIDs: ids})
-	res := review.Run(review.Input{Spec: s, Dict: d, DictNotes: notes, Defaults: defs, GenericIDs: ids, Apply: applied})
+	m := model.Detect(s, defs.Model)
+	applied := apply.Apply(doc, s, d, defs, apply.Options{Seed: o.seed, GenericIDs: ids, RecordKey: recordKey(m)})
+	fmt.Fprintf(out, "model: %d resources; the examples of each follow one record through the run\n", len(m.Resources))
+	for _, line := range m.Describe() {
+		fmt.Fprintf(out, "  %s\n", line)
+	}
+	for _, n := range m.Notes {
+		fmt.Fprintf(out, "  %-21s %s: %s\n", scenario.CodeModel, n.Where, n.Message)
+	}
+	if defs.Run == nil && len(m.Resources) > 0 {
+		fmt.Fprintf(out, "  %-21s the examples follow apitest's default order; if the test sets MethodOrder, DeleteLast or Tags, copy them into %q in %s\n", "ORDER", defaults.ApitestKey, firstDefaults(o))
+	}
+	res := review.Run(review.Input{Spec: s, Dict: d, DictNotes: notes, Defaults: defs, GenericIDs: ids, Apply: applied, Model: m})
 	fmt.Fprintf(out, "review: %d suggestions; %d defaults proposed, %d values to choose, %d defaults to correct, %d fixed by apply, %d to fix in the spec\n",
 		len(res.Suggestions), res.Count(review.ActionDefault), res.Count(review.ActionChoose), res.Count(review.ActionEdit), res.Count(review.ActionApply), res.Count(review.ActionSpec))
 	for _, sg := range res.Suggestions {
 		line := sg.Where + ": " + sg.Message
 		if sg.Action == review.ActionDefault {
 			line = fmt.Sprintf("%s = %s  (%s at %s)", sg.Key, compactJSON(sg.Value), sg.Finding, sg.Where)
+			if len(line) > 160 {
+				line = line[:157] + "..."
+			}
 		} else if sg.Key != "" {
 			line = fmt.Sprintf("%s  (%s at %s: %s)", sg.Key, sg.Finding, sg.Where, sg.Message)
 		}
@@ -336,6 +416,7 @@ func reviewCommand(o *options, out io.Writer) error {
 		return nil
 	}
 	target := firstDefaults(o)
+	_, statErr := os.Stat(target)
 	add := res.Changes()
 	changed, err := defaults.Update(target, add, nil) // nil also drops an old "$review" block
 	if err != nil {
@@ -345,6 +426,8 @@ func reviewCommand(o *options, out io.Writer) error {
 	switch {
 	case n > 0:
 		fmt.Fprintf(out, "%s: %d entries added; check them, change or delete what is wrong, then run: %s\n", target, n, applyCommand(o))
+	case errors.Is(statErr, os.ErrNotExist):
+		fmt.Fprintf(out, "%s: created (empty), nothing to add\n", target)
 	case changed:
 		fmt.Fprintf(out, "%s: nothing added (old \"$review\" block removed)\n", target)
 	default:

@@ -12,6 +12,14 @@
 //	                                        where apitest takes the parameter from
 //	"listDocks.zone": null                  no value yet: to be filled in
 //	"$rejected": ["GetApp.appCode"]          proposals "review" must not repeat
+//	"$snapshot": {"Book": {"from": "GetBooks", "count": 3}}
+//	                                        where the records of a resource
+//	                                        are fetched with -base-url
+//	"$model": {"Book": {"schemas": […], "keys": ["Id", "Code"]}}
+//	                                        corrections of the resource model
+//	"$apitest": {"MethodOrder": ["POST", "PUT", "GET", "DELETE"], "DeleteLast": true}
+//	                                        the apitest Config that decides
+//	                                        the order of the cases
 //	"$comment": "…"                         ignored
 package defaults
 
@@ -64,8 +72,15 @@ type Defaults struct {
 	// Rejected are the keys of "$rejected": proposals of "apitest-gen
 	// review" that were turned down and must not be proposed again.
 	Rejected []string
-	entries  map[string]*Entry // lower-case key → entry
-	order    []string          // lower-case keys in file order
+	// Snapshot are the entries of "$snapshot" by resource name.
+	Snapshot map[string]Snapshot
+	// Model are the entries of "$model" by resource name.
+	Model map[string]ModelFix
+	// Run is "$apitest"; nil if the file has none.
+	Run *Run
+
+	entries map[string]*Entry // lower-case key → entry
+	order   []string          // lower-case keys in file order
 }
 
 // Empty returns defaults without entries.
@@ -122,6 +137,12 @@ func Parse(b []byte) (*Defaults, error) {
 				problems = append(problems, fmt.Sprintf("%q must be a list of keys", key))
 			}
 			d.Rejected = append(d.Rejected, list...)
+			continue
+		}
+		if handled, err := d.special(key, raw); handled {
+			if err != nil {
+				problems = append(problems, err.Error())
+			}
 			continue
 		}
 		if strings.HasPrefix(key, "$") {
@@ -386,6 +407,7 @@ func LoadAll(paths ...string) (*Defaults, error) {
 			}
 			out.Merge(d)
 			out.Rejected = append(out.Rejected, d.Rejected...)
+			out.mergeSpecial(d)
 			if out.Path == "" {
 				out.Path = one
 			}

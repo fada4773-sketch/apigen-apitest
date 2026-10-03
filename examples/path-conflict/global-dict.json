@@ -82,5 +82,25 @@
       "required": true,
       "value": 710
     }
+  },
+  "paths": {
+    "/book/{id}": 404,
+    "/student/{id}": 307
+  },
+  "records": {
+    "Book": [
+      {
+        "Class": "K",
+        "Id": 981,
+        "Title": "Every Sink"
+      }
+    ],
+    "Student": [
+      {
+        "Class": "B",
+        "Id": 922,
+        "Name": "Any Student"
+      }
+    ]
   }
 }

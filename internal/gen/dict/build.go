@@ -124,6 +124,9 @@ func Build(s *spec.Spec, old *Dict, opt Options) (*Dict, []Note, Stats) {
 		}
 	}
 	sort.SliceStable(b.notes, func(i, j int) bool { return b.notes[i].Where < b.notes[j].Where })
+	// the records are the start state of the examples; apitest-gen reuses
+	// them, so a second run gives the same examples
+	b.out.Records = old.Records
 	return b.out, b.notes, b.stats
 }
 

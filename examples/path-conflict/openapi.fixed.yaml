@@ -27,31 +27,6 @@ paths:
                 Class: K
                 Id: 981
                 Title: Every Sink
-          links:
-            getBookByClass_class:
-              operationId: getBookByClass
-              parameters:
-                class: $response.body#/Class
-            updateBookClass_class:
-              operationId: updateBookClass
-              parameters:
-                class: $response.body#/Class
-            deleteBookClass_class:
-              operationId: deleteBookClass
-              parameters:
-                class: $response.body#/Class
-            getBookById_id:
-              operationId: getBookById
-              parameters:
-                id: $response.body#/Id
-            updateBook_id:
-              operationId: updateBook
-              parameters:
-                id: $response.body#/Id
-            deleteBook_id:
-              operationId: deleteBook
-              parameters:
-                id: $response.body#/Id
         "400": {$ref: "#/components/responses/BadRequest"}
         "401": {$ref: "#/components/responses/Unauthorized"}
   /book/{id}:
@@ -82,7 +57,7 @@ paths:
             schema: {$ref: "#/components/schemas/Book"}
             example:
               Class: K
-              Title: Every Sink
+              Title: How Troupe
       responses:
         "200":
           description: updated
@@ -92,7 +67,7 @@ paths:
               example:
                 Class: K
                 Id: 981
-                Title: Every Sink
+                Title: How Troupe
         "404": {$ref: "#/components/responses/NotFound"}
         "401": {$ref: "#/components/responses/Unauthorized"}
     delete:
@@ -171,31 +146,6 @@ paths:
                 Class: B
                 Id: 922
                 Name: Any Student
-          links:
-            getStudentByClass_class:
-              operationId: getStudentByClass
-              parameters:
-                class: $response.body#/Class
-            updateStudentClass_class:
-              operationId: updateStudentClass
-              parameters:
-                class: $response.body#/Class
-            deleteStudentClass_class:
-              operationId: deleteStudentClass
-              parameters:
-                class: $response.body#/Class
-            getStudentById_id:
-              operationId: getStudentById
-              parameters:
-                id: $response.body#/Id
-            updateStudent_id:
-              operationId: updateStudent
-              parameters:
-                id: $response.body#/Id
-            deleteStudent_id:
-              operationId: deleteStudent
-              parameters:
-                id: $response.body#/Id
         "400": {$ref: "#/components/responses/BadRequest"}
         "401": {$ref: "#/components/responses/Unauthorized"}
   /student/{id}:
@@ -226,7 +176,7 @@ paths:
             schema: {$ref: "#/components/schemas/Student"}
             example:
               Class: B
-              Name: Any Student
+              Name: Which Student
       responses:
         "200":
           description: updated
@@ -236,7 +186,7 @@ paths:
               example:
                 Class: B
                 Id: 922
-                Name: Any Student
+                Name: Which Student
         "404": {$ref: "#/components/responses/NotFound"}
         "401": {$ref: "#/components/responses/Unauthorized"}
     delete:

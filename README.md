@@ -631,15 +631,17 @@ apitest-gen -spec openapi.yaml -dict global-dict.json -defaults defaults.json -c
     "getPlanet.id": 7,
     "planetId": 7,
     "updatePlanet.x-apitest-verify": false,
-    "getMoon.moonId": {"bind": "createMoon", "pointer": "/id"},
-    "planetCode": {"from": "GET /planets", "pick": "/[active=true]/code"}
+    "planetCode": {"from": "GET /planets", "pick": "/[active=true]/code"},
+    "$apitest": {"MethodOrder": ["POST", "PUT", "GET", "DELETE"], "DeleteLast": true}
   }
   ```
 
-  Plain names apply everywhere; `Dto.field` and `operationId.field` narrow them. `/planets/{id}` takes `planetId`, derived from the path. `x-…` keys set extensions, `bind` writes `x-apitest-bind` or `links`, and `from` fetches the value from a running environment (`-base-url`, `apitest-gen discover`).
+  Plain names apply everywhere; `Dto.field` and `operationId.field` narrow them. `/planets/{id}` takes `planetId`, derived from the path. `x-…` keys set extensions, and `from` fetches the value from a running environment (`-base-url`, `apitest-gen discover`). `$apitest` repeats the order settings of your `apitest.Config`.
+- **Examples follow the data.** Every resource (`Planet`, `Moon`, …) gets records, fetched from a running instance with `-base-url` or generated. The cases are played in the order apitest runs them: an update sends new values, and every later GET, list and response example shows them. Path parameters, bodies and responses of one record always agree. No links or extensions are needed for this.
 - The examples go **into the spec, in place** (or `-out`), where apitest reads them: parameter examples, request bodies, 2xx responses, at the `$ref` target of shared objects. Comments and key order stay; a second run changes nothing. A default that violates a schema stops the run before anything is written.
 - **`-check`** (or `apitest-gen check`) then reports every case apitest could not send and every example that violates its schema, with exit code 1 for CI. It uses apitest's own case building, so it sees what a real run would see.
-- **`apitest-gen review`** evaluates what apitest would report as spec findings (heuristic bindings, missing 401/403, invalid examples, …), the cases it cannot send and the values the generator cannot create, and writes a fix for each into `defaults.json`. You check that file; the next `apitest-gen` run takes the entries into the spec.
+- Before anything is saved, the written spec is played again the way apitest will run it; an example that does not fit the data at its case stops the run, and nothing is written.
+- **`apitest-gen review`** prints the resource model, evaluates what apitest would report as spec findings (missing 401/403, invalid examples, …), the cases it cannot send and the values the generator cannot create, and writes a fix for each into `defaults.json`. You check that file; the next `apitest-gen` run takes the entries into the spec.
 
 The flags you need most often:
 
@@ -649,6 +651,7 @@ The flags you need most often:
 | `-dict` | the dictionary, default `global-dict.json` |
 | `-defaults` | one or more defaults files, comma-separated |
 | `-out` | write the spec there instead of in place |
+| `-base-url` | running instance: the records come from there (GET only) |
 | `-check` | check the written spec, exit code 1 on problems |
 | `-dry-run` | show what would change, write nothing |
 | `-v` | verbose: also list every value and example written and how often each default was used; without it only problems are listed |
