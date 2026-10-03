@@ -102,6 +102,13 @@ contain breaking changes, which are listed here.
   path parameters, and a parameter object shared by paths of different
   records is copied into the path (`PARAM_INLINED`). `"$model"` corrects
   the model. No links and no extensions are written for this.
+- `"from"` in `"$snapshot"` takes the request itself
+  (`"/DefaultBook/Level/A1?bookCode=abc"`), an operationId still works.
+  `review` proposes the request with every parameter it knows (key of a
+  record of the last run, default, record field of the same name), keeps
+  unknown ones as `{level}` and writes the path template, the filled values
+  and their source into `"$comment"`. A list with a path parameter of
+  unknown meaning is no automatic source any more.
 - `verify` also plays the cases of the written spec, built and ordered by
   apitest's own code, on the start records and checks every example
   (`EXAMPLE_STALE`, `PARAM_NO_RECORD`); a snapshot that fails, is short or

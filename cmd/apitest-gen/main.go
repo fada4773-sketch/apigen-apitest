@@ -15,6 +15,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -403,6 +404,15 @@ func reviewCommand(o *options, out io.Writer) error {
 		} else if sg.Key != "" {
 			line = fmt.Sprintf("%s  (%s at %s: %s)", sg.Key, sg.Finding, sg.Where, sg.Message)
 		}
+		if m, ok := sg.Value.(map[string]any); ok && sg.Key == defaults.SnapshotKey {
+			line = fmt.Sprintf("%s  (%s at %s)", sg.Key, sg.Finding, sg.Where)
+			fmt.Fprintf(out, "  %-8s %s\n", sg.Action, line)
+			for _, name := range slices.Sorted(maps.Keys(m)) {
+				e, _ := m[name].(map[string]any)
+				fmt.Fprintf(out, "           %s: from %v  (%v)\n", name, e["from"], e["$comment"])
+			}
+			continue
+		}
 		fmt.Fprintf(out, "  %-8s %s\n", sg.Action, line)
 		if o.verbose && sg.Fix != "" {
 			fmt.Fprintf(out, "           → %s\n", strings.ToUpper(sg.Fix[:1])+strings.ReplaceAll(sg.Fix[1:], "\n", "\n             "))
@@ -465,8 +475,11 @@ func countAdded(add []defaults.Pair, defs *defaults.Defaults) int {
 }
 
 func compactJSON(v any) string {
-	b, _ := json.Marshal(v)
-	return string(b)
+	var b strings.Builder
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(v)
+	return strings.TrimSpace(b.String())
 }
 
 // report prints a check result and returns the number of problems.

@@ -25,16 +25,26 @@ apitest-gen review -spec openapi.yaml
 
 `-dict global-dict.json` and `-defaults defaults.json` are the defaults, so you do not need to type them.
 
-**What `review` writes,** for a spec with `GET /Book` (a list), `GET /Book/id/{id}`, `GET /Book/{Code}`, `PUT /Book/{Code}` and `GET /Book/{Code}/Article`:
+**What `review` writes,** for a spec with `GET /DefaultBook/Level/{level}` (a list with the optional query parameters `bookCode` and `isbn`), `GET /Book/id/{id}`, `GET /Book/{Code}`, `PUT /Book/{Code}` and `GET /Book/{Code}/Article`, after a first run:
 
 ```json
 {
   "$snapshot": {
-    "Article": { "count": 1, "from": "GetArticles" },
-    "Book":    { "count": 1, "from": "GetBooks" }
+    "Article": {
+      "$comment": "GetArticles: /Book/{Code}/Article; filled: Code = Code of the first Book",
+      "count": 1,
+      "from": "/Book/abc/Article"
+    },
+    "Book": {
+      "$comment": "GetDefaultBooks: /DefaultBook/Level/{level}?bookCode={bookCode}&isbn={isbn}; filled: bookCode = Code of the first Book; replace {level} with values that exist in the instance",
+      "count": 1,
+      "from": "/DefaultBook/Level/{level}?bookCode=abc"
+    }
   }
 }
 ```
+
+`from` is the request the records are fetched with. What `review` knows is filled in, and `$comment` says from where, so you can check it against the template. `{level}` is unknown: write a level that exists (`/DefaultBook/Level/A1?bookCode=abc`). Before the first run no record is known; then a parent key stays a placeholder (`/Book/{Code}/Article`), and the snapshot fills it from the first Book.
 
 and what you add by hand:
 
@@ -46,7 +56,7 @@ and what you add by hand:
 
 | Entry | Meaning |
 |---|---|
-| `"$snapshot"` | the list each resource's records come from with `-base-url`; `count` elements become records and appear in the list examples |
+| `"$snapshot"` | the request each resource's records come from with `-base-url`; `count` elements become records and appear in the list examples |
 | `"$apitest"` | the same `MethodOrder`, `DeleteLast` and `Tags` as in `apitest.Config`. With `PUT` before `GET`, the GETs expect what the PUTs sent. |
 | `"$model"` | only if `review` shows a resource, key or role wrongly |
 | `"/path/{id}": 275` | an id no record and no producer provides; the value the generator used so far. Replace it with one that exists. |
@@ -58,7 +68,7 @@ and what you add by hand:
 |---|---|
 | the model | Does every resource have the right DTOs and keys? Correct it with `"$model": {"Book": {"keys": [...]}}`. |
 | `ORDER` | Copy `MethodOrder`, `DeleteLast` and `Tags` of your test into `"$apitest"`. If they differ, the examples follow another order than the run. |
-| `$snapshot` | Is it the right list? Raise `count` for more list elements. |
+| `$snapshot` | Is it the right list? Are the filled parameters right (compare with `$comment`)? Replace every `{…}` that is not a parent key. Raise `count` for more list elements. |
 | a fixed id (`"/path/{id}": 275`) | Replace it with an id that exists in the test environment, or delete it. |
 | a proposal you deleted | Add its key to `"$rejected": ["GetBook.Code"]`, so `review` does not propose it again. |
 | a problem printed as `SPEC` | Only a change of `openapi.yaml` helps, e.g. a missing 401. Do it by hand. |
