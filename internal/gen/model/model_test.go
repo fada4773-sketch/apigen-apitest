@@ -108,3 +108,23 @@ func TestSegmentBefore(t *testing.T) {
 		}
 	}
 }
+
+// An object with one list is a page only with a list field like "items" or
+// a DTO name like "…Page"; a Pilot with its Ships is a read of the Pilot.
+func TestPage(t *testing.T) {
+	m := Detect(load(t, "mandatory.yaml"), nil)
+	if o := m.OpByID("GetPilot"); o == nil || o.Role != RoleRead || o.Resource.Name != "Pilot" {
+		t.Errorf("GetPilot: %+v", o)
+	}
+	if m.Resource("ShipInfo") != nil {
+		t.Errorf("resources: %v", m.Describe())
+	}
+	for _, c := range []struct {
+		dto, field string
+		want       bool
+	}{{"ShipPage", "ships", true}, {"Ships", "items", true}, {"PilotRead", "Ships", false}} {
+		if got := page(c.dto, c.field); got != c.want {
+			t.Errorf("page(%q, %q) = %v", c.dto, c.field, got)
+		}
+	}
+}

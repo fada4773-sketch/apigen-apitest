@@ -467,10 +467,26 @@ func listOrItem(op *spec.Operation) (dto, items string, list bool) {
 			lists = append(lists, k)
 		}
 	}
-	if len(lists) == 1 && len(props) <= 4 {
+	if len(lists) == 1 && len(props) <= 4 && page(name, lists[0]) {
 		return dict.DTORef(props[lists[0]].Value.Items), "/" + lists[0], true
 	}
 	return name, "", false
+}
+
+// page reports whether a DTO with one list is a page of that list: by the
+// name of the list field or of the DTO. A Pilot with a list of Ships is no
+// page of Ships.
+func page(dto, field string) bool {
+	switch strings.ToLower(field) {
+	case "items", "data", "content", "results", "records", "values", "elements", "list", "entries", "rows":
+		return true
+	}
+	for _, s := range []string{"Page", "List", "Result", "Results", "Collection", "Paged"} {
+		if strings.HasSuffix(dto, s) {
+			return true
+		}
+	}
+	return false
 }
 
 func isArray(s *openapi3.Schema) bool {

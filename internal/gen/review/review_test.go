@@ -164,7 +164,7 @@ func TestReviewModel(t *testing.T) {
 		b, _ := json.Marshal(p.Value)
 		got[p.Key] = string(b)
 	}
-	want := map[string]string{defaults.SnapshotKey: `{"Moon":{"$comment":"listMoonsOfPlanet: /Planet/id/{id}/Moon; {id} is the Id of the first Planet","count":1,"from":"/Planet/id/{id}/Moon"},"Planet":{"$comment":"listPlanets: /Planet","count":1,"from":"/Planet"}}`}
+	want := map[string]string{defaults.SnapshotKey: `{"Moon":{"$comment":"listMoonsOfPlanet: /Planet/id/{id}/Moon; {id} is the Id of the first Planet","count":1,"from":"/Planet/id/{id}/Moon","mandatoryfields":[]},"Planet":{"$comment":"listPlanets: /Planet","count":1,"from":"/Planet","mandatoryfields":[]}}`}
 	if len(got) != len(want) || got[defaults.SnapshotKey] != want[defaults.SnapshotKey] {
 		t.Errorf("got %v", got)
 	}
@@ -201,7 +201,7 @@ func TestReviewSnapshotURL(t *testing.T) {
 		t.Fatalf("no $snapshot proposed: %+v", r.Suggestions)
 	}
 	got, _ := json.Marshal(sg.Value)
-	want := `{"Dock":{"$comment":"GetDefaultDocks: /DefaultDock/Level/{level}?dockCode={dockCode}&twoDigitCode={twoDigitCode}&pilotNumber={pilotNumber}; filled: dockCode = Code of the first Dock; replace {level} with values that exist in the instance","count":1,"from":"/DefaultDock/Level/{level}?dockCode=abc"}}`
+	want := `{"Dock":{"$comment":"GetDefaultDocks: /DefaultDock/Level/{level}?dockCode={dockCode}&twoDigitCode={twoDigitCode}&pilotNumber={pilotNumber}; filled: dockCode = Code of the first Dock; replace {level} with values that exist in the instance","count":1,"from":"/DefaultDock/Level/{level}?dockCode=abc","mandatoryfields":[]}}`
 	if g := strings.ReplaceAll(string(got), `\u0026`, "&"); g != want {
 		t.Errorf("got  %s\nwant %s", g, want)
 	}

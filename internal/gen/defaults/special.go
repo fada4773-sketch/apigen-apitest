@@ -25,6 +25,10 @@ type Snapshot struct {
 	Count int    `json:"count"` // records taken from the list; 0 means 1
 	// Comment is free text; review writes the path template there.
 	Comment string `json:"$comment,omitempty"`
+	// Mandatory are fields every fetched record must have, not null and
+	// not empty: "author" or "ReadDTO.BookDetail.Author". review writes
+	// the key empty.
+	Mandatory []string `json:"mandatoryfields,omitempty"`
 }
 
 // Records is the number of records, at least 1.

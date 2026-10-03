@@ -511,3 +511,67 @@ func TestMatchPath(t *testing.T) {
 		}
 	}
 }
+
+// "mandatoryfields": only elements with a value in every listed field
+// become records. A segment is a field or a DTO name, which is looked up
+// in the element and below it; in a list one element with a value counts.
+func TestRunSnapshotMandatory(t *testing.T) {
+	pilots := []any{
+		map[string]any{"Code": "a", "Rank": nil, "Detail": map[string]any{"License": map[string]any{"Expires": "2030-01-01"}}},
+		map[string]any{"Code": "b", "Rank": json.Number("2"), "Detail": map[string]any{"License": map[string]any{"Expires": nil}}},
+		map[string]any{"Code": "c", "Rank": json.Number("3"), "Detail": map[string]any{"License": map[string]any{"Expires": "2031-01-01"}},
+			"Ships": []any{map[string]any{"Callsign": nil}, map[string]any{"Callsign": "X1"}}},
+		map[string]any{"Code": "d", "Rank": json.Number("4"), "Detail": map[string]any{"License": map[string]any{"Expires": "2032-01-01"}},
+			"Ships": []any{map[string]any{"Callsign": ""}}},
+	}
+	fetch := func(_ context.Context, path string) (any, error) {
+		if path == "/Pilot" {
+			return pilots, nil
+		}
+		for _, p := range pilots {
+			if "/Pilot/"+p.(map[string]any)["Code"].(string) == path {
+				return p, nil
+			}
+		}
+		return nil, errors.New("status 404")
+	}
+	run := func(mandatory string, count int) outcome {
+		p := newPipelineFile(t, "mandatory.yaml", fmt.Sprintf(`{"$snapshot": {"Pilot": {"from": "/Pilot", "count": %d, "mandatoryfields": %s}}}`, count, mandatory))
+		p.fetch = fetch
+		return p.run()
+	}
+	codes := func(o outcome) string {
+		var out []string
+		for _, r := range o.res.Records.Records("Pilot") {
+			out = append(out, fmt.Sprint(r["Code"]))
+		}
+		return strings.Join(out, ",")
+	}
+	for _, c := range []struct {
+		mandatory string
+		count     int
+		want      string
+	}{
+		{`[]`, 1, "a"},
+		{`["rank", ""]`, 2, "b,c"},
+		{`["PilotRead.Detail.License.Expires", "Rank"]`, 2, "c,d"},
+		{`["License.Expires"]`, 3, "a,c,d"},
+		{`["PilotDetail.License.Expires"]`, 1, "a"},
+		{`["ShipInfo.Callsign"]`, 1, "c"},
+		{`["Ships.Callsign"]`, 1, "c"},
+	} {
+		o := run(c.mandatory, c.count)
+		if len(o.res.Problems) > 0 || codes(o) != c.want {
+			t.Errorf("%s: records %q, want %q; problems %v", c.mandatory, codes(o), c.want, o.res.Problems)
+		}
+	}
+
+	o := run(`["Ships.Callsign"]`, 2)
+	if len(o.res.Problems) == 0 || o.res.Problems[0].Code != CodeSnapshotShort || !strings.Contains(o.res.Problems[0].Message, "1 of them have a value") {
+		t.Errorf("short: %v", o.res.Problems)
+	}
+	o = run(`["Detail.Licence"]`, 1)
+	if len(o.res.Problems) == 0 || !strings.Contains(o.res.Problems[0].Message, `"Detail.Licence" matches no field`) {
+		t.Errorf("typo: %v", o.res.Problems)
+	}
+}

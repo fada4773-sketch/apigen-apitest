@@ -16,10 +16,11 @@ import (
 
 // source is where the records of a resource are fetched.
 type source struct {
-	op       *model.Op
-	url      string // the request written in "$snapshot", "" to build it from op
-	count    int
-	explicit bool // from "$snapshot"
+	op        *model.Op
+	mandatory []string // "mandatoryfields" of "$snapshot"
+	url       string   // the request written in "$snapshot", "" to build it from op
+	count     int
+	explicit  bool // from "$snapshot"
 }
 
 // path is the request of the source; missing names a placeholder without
@@ -96,7 +97,9 @@ func (b *builder) snapshot(ctx context.Context) {
 func (b *builder) source(r *model.Resource) (source, bool) {
 	if s, ok := b.in.Defaults.SnapshotFor(r.Name); ok {
 		if IsURL(s.From) {
-			return b.urlSource(r, s.From, s.Records())
+			src, ok := b.urlSource(r, s.From, s.Records())
+			src.mandatory = s.Mandatory
+			return src, ok
 		}
 		o := b.in.Model.OpByID(s.From)
 		switch {
@@ -105,7 +108,7 @@ func (b *builder) source(r *model.Resource) (source, bool) {
 		case o.Resource != r || o.Op.Method != http.MethodGet:
 			b.res.problem(CodeSnapshotFail, "$snapshot."+r.Name, "%s is not a GET of %s", s.From, r.Name)
 		default:
-			return source{op: o, count: s.Records(), explicit: true}, true
+			return source{op: o, count: s.Records(), explicit: true, mandatory: s.Mandatory}, true
 		}
 		return source{}, false
 	}
@@ -197,11 +200,40 @@ func (b *builder) fetchSource(ctx context.Context, r *model.Resource, src source
 	if !b.checkItems(src.op, items, path) {
 		return
 	}
+	all := len(items)
+	paths := mandatory(src.mandatory)
+	if len(paths) > 0 {
+		ref := itemRef(src.op)
+		for i, p := range paths {
+			if !resolvable(ref, p, 0) {
+				b.res.problem(CodeSnapshotFail, "$snapshot."+r.Name, "mandatoryfields: %q matches no field of the response of %s; check the names", strings.TrimSpace(src.mandatory[i]), src.op.Op.ID)
+			}
+		}
+		if len(b.res.Problems) > 0 {
+			return
+		}
+		var kept []any
+		for _, item := range items {
+			if hasAll(item, ref, paths) {
+				kept = append(kept, item)
+			}
+		}
+		items = kept
+	}
 	items = b.selectKeyed(ctx, r, items)
 	if len(b.res.Problems) > 0 {
 		return
 	}
+	if len(paths) > 0 && len(items) > 0 && !hasAll(items[0], itemRef(src.op), paths) {
+		b.res.problem(CodeSnapshotKey, r.Name, "the %s the defaults select lacks a value in one of mandatoryfields %v", r.Name, src.mandatory)
+		return
+	}
 	if len(items) < src.count {
+		if len(paths) > 0 {
+			b.res.problem(CodeSnapshotShort, r.Name, "GET %s (%s) returned %d elements, %d of them have a value in every one of mandatoryfields %v; \"$snapshot\" asks for %d; add data to the instance, lower \"count\" or check mandatoryfields",
+				path, src.op.Op.ID, all, len(items), src.mandatory, src.count)
+			return
+		}
 		if src.explicit || len(items) > 0 {
 			b.res.problem(CodeSnapshotShort, r.Name, "GET %s (%s) returned %d elements, \"$snapshot\" asks for %d; add data to the instance or lower \"count\"", path, src.op.Op.ID, len(items), src.count)
 			return
@@ -221,6 +253,10 @@ func (b *builder) fetchSource(ctx context.Context, r *model.Resource, src source
 	b.store.set(r, recs)
 	b.store.fetched[strings.ToLower(r.Name)] = true
 	b.store.lists[src.op.Op.ID] = items[:min(len(items), src.count)]
+	if len(paths) > 0 {
+		b.res.note(CodeSnapshot, r.Name, "%d of %d elements from GET %s (%s); %d have every one of mandatoryfields %v", src.count, all, path, src.op.Op.ID, len(items), src.mandatory)
+		return
+	}
 	b.res.note(CodeSnapshot, r.Name, "%d of %d elements from GET %s (%s)", src.count, len(items), path, src.op.Op.ID)
 }
 

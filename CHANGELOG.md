@@ -109,6 +109,14 @@ contain breaking changes, which are listed here.
   unknown ones as `{level}` and writes the path template, the filled values
   and their source into `"$comment"`. A list with a path parameter of
   unknown meaning is no automatic source any more.
+- `"mandatoryfields"` in `"$snapshot"`: only elements with a value (not
+  null, not empty) in every listed field become records. Paths may name
+  fields and DTOs (`BookRead.BookDetail.Author`); a DTO name continues at
+  the object of that type, in the element or below it. A path that matches
+  no field stops the run. `review` writes the key empty.
+- The model takes an object with one list for a page only with a list
+  field like `items` or a DTO named `…Page`/`…List`; a Pilot with its
+  Ships stays a read of the Pilot.
 - `verify` also plays the cases of the written spec, built and ordered by
   apitest's own code, on the start records and checks every example
   (`EXAMPLE_STALE`, `PARAM_NO_RECORD`); a snapshot that fails, is short or

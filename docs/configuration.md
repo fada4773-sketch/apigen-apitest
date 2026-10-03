@@ -940,7 +940,7 @@ apitest runs the cases in a fixed order against one database. After `UpdateBookB
 | From the spec | Detected |
 |---|---|
 | DTO names with the same stem: `BookRead`, `BookUpdate` (suffixes such as `Read`, `Update`, `Create`, `Dto`, `Request`, `Response`, `Details`, `Base`) | one resource `Book` |
-| a GET that returns the DTO or a list of it (also a page `{items: [...], total}`) | the resource exists; read or list |
+| a GET that returns the DTO or a list of it (also a page: one list field named `items`, `data`, `content`, `results`, … or a DTO named `…Page`, `…List`, `…Result`) | the resource exists; read or list |
 | `/Book/id/{id}`, `/Book/{Code}` | keys: the field a path parameter holds (`{Code}` → `Code`, `{id}` → `Id`). The resource is the literal segment in front of the parameter; a segment `id`, `code`, `key`, `name` or the parameter name itself is skipped. |
 | `/Book/{Code}/Article`, `/Book/id/{id}/Article` | `Article` belongs to `Book`; its field `BookId` or `BookCode` refers to the book |
 | PUT or PATCH with a body of the resource | update; POST: create; DELETE at the path of a read: delete |
@@ -984,6 +984,18 @@ If something is detected wrongly, correct it in `defaults.json`:
 ```
 
 `from` is the request relative to `-base-url`, with its query. `GET ` in front is allowed, and so is an operationId (`"from": "GetBooks"`), which then sends that GET with the known parameters. The request must fit a GET of the resource in the spec, otherwise the run stops. Placeholders left in it are filled where the value is known: a key of another resource from its first record (`{Code}` of the first Book), a default (`"GetDefaultBooks.level"` or `"level"`). An optional query parameter without value is left out; a path or required query parameter without value stops the run with `{level} in "/DefaultBook/Level/{level}" has no value`. `$comment` is free text.
+
+**Mandatory fields.** `"mandatoryfields"` lists fields every record must have, with a value that is not null, not `""` and not an empty list. Only such elements are taken; the first `count` of them become the records:
+
+```json
+"Book": {
+  "from": "/DefaultBook/Level/A1",
+  "count": 2,
+  "mandatoryfields": ["Author", "ExpireDate", "BookRead.BookDetail.Author"]
+}
+```
+
+A field is a path with dots. Each segment is a field name (case does not matter) or the name of a DTO. For a DTO name, the path continues at the object of that DTO: the element itself (`BookRead`, also through `allOf`), or the first object of that type below it. So `BookRead.BookDetail.Author`, `BookDetail.Author` and `Author` inside a `BookDetail` can all be written. In a list one element with a value is enough (`Ships.Callsign`). A path that matches no field of the response schema stops the run (a typo); too few matching elements stop it with `SNAPSHOT_SHORT … 1 of them have a value in every one of mandatoryfields`. A key default (`"GetBook.Code": "abc"`) must select an element that has the fields. `review` writes the key empty (`[]`); empty strings in the list are ignored.
 
 `count` is 1 if left out. Every fetched element is validated against the schema of the response; a violation, a failing request or fewer elements than `count` stop the run, and nothing is written. An empty list means the test starts without such records (`SNAPSHOT_EMPTY`): the examples then show only the records the test creates. `-token-env` and `-header` apply as for `discover`.
 
@@ -1066,7 +1078,7 @@ A JSON object. Keys are compared without regard to case; two keys that differ on
 | `operationId.x-name` | `"scrapShip.x-apitest-verify": false` | an extension on the operation |
 | `operationId.param` with `bind` | `"bookDock.dockCode": {"bind": "listDocks", "pointer": "/0/DockCode"}` | where apitest takes the parameter from at run time |
 | any key with `from` | `"DockCode": {"from": "GET /docks", "pick": "/[Active=true]/DockCode"}` | a value fetched by `discover` or `-base-url`, then used like a plain value |
-| `$snapshot` | `{"Book": {"from": "/DefaultBook/Level/A1", "count": 3}}` | the request the records of a resource are fetched with, with `-base-url` (13.5) |
+| `$snapshot` | `{"Book": {"from": "/DefaultBook/Level/A1", "count": 3, "mandatoryfields": ["Author"]}}` | the request the records of a resource are fetched with, with `-base-url`, and the fields they must have (13.5) |
 | `$model` | `{"Book": {"keys": ["Isbn"]}}` | corrections of the resource model (13.5) |
 | `$apitest` | `{"MethodOrder": ["POST", "PUT", "GET", "DELETE"], "DeleteLast": true}` | the apitest Config that orders the cases; must match the test (13.5) |
 
@@ -1365,7 +1377,7 @@ defaults.json: 3 entries added; check them, change or delete what is wrong, then
 | Finding | Source | Fix |
 |---|---|---|
 | `heuristic`: a parameter resolved heuristically | apitest report | nothing: the examples follow the heuristic (13.5) |
-| the resources of the spec | `review` | `DEFAULT` `"$snapshot"` with the request each resource is fetched with, if the defaults have none (`SNAPSHOT_SOURCE`). Parameters with a known value are filled in: the key of a record of the last run, a default, or a record field of the same name (`bookCode` → `Code` of the first Book). The others stay placeholders (`{level}`); keys of a parent are filled by the snapshot itself. `$comment` holds the operationId and the path template with all parameters, which values were filled and from where, and what is left to replace. `ORDER` if `"$apitest"` is missing |
+| the resources of the spec | `review` | `DEFAULT` `"$snapshot"` (with an empty `"mandatoryfields": []` to fill in) with the request each resource is fetched with, if the defaults have none (`SNAPSHOT_SOURCE`). Parameters with a known value are filled in: the key of a record of the last run, a default, or a record field of the same name (`bookCode` → `Code` of the first Book). The others stay placeholders (`{level}`); keys of a parent are filled by the snapshot itself. `$comment` holds the operationId and the path template with all parameters, which values were filled and from where, and what is left to replace. `ORDER` if `"$apitest"` is missing |
 | `binding`: a link to an unknown operation or parameter | apitest report | `SPEC`, with the closest operationId (`did you mean "getDock"?`) |
 | `auth`: `x-apitest-forbidden` without a 403 response | apitest report | `DEFAULT` `"<operationId>.x-apitest-forbidden": false`, or document a 403 |
 | `auth`: a secured operation without 401 or 403 | apitest report | `SPEC` with the response to add, or `Config.SkipAuthCases` |
@@ -1391,7 +1403,7 @@ The Swagger 2.0 conversion note needs no fix and is not listed.
 {
   "PilotEmail": "test@starport.example",
   "getShip.x-apitest-forbidden": false,
-  "$snapshot": { "Dock": { "from": "/docks?zone={zone}", "count": 1, "$comment": "listDocks: /docks?zone={zone}; replace {zone} with values that exist in the instance" } },
+  "$snapshot": { "Dock": { "from": "/docks?zone={zone}", "count": 1, "mandatoryfields": [], "$comment": "listDocks: /docks?zone={zone}; replace {zone} with values that exist in the instance" } },
   "/pilots/{id}": 275
 }
 ```
@@ -1407,7 +1419,7 @@ The Swagger 2.0 conversion note needs no fix and is not listed.
 
 1. Run `apitest-gen review -spec openapi.yaml` (with `-v` for the reasons).
 2. Check the model `review` printed. Correct it with `"$model"` if a resource, a key or a role is wrong. Copy `MethodOrder`, `DeleteLast` and `Tags` of your test into `"$apitest"`.
-3. Open `defaults.json` and check the new entries at the end: in `$snapshot` compare `from` with the template in `$comment`, replace what is left as `{…}` with values that exist, set `count`; then the values. Replace fixed ids with ids that exist. Delete what is wrong and add its key to `$rejected`.
+3. Open `defaults.json` and check the new entries at the end: in `$snapshot` compare `from` with the template in `$comment`, replace what is left as `{…}` with values that exist, set `count`, add the fields a record must have to `mandatoryfields`; then the values. Replace fixed ids with ids that exist. Delete what is wrong and add its key to `$rejected`.
 4. Fix what was printed as `EDIT` and `SPEC`.
 5. Run `apitest-gen -spec openapi.yaml -base-url <instance>` (or without `-base-url` for generated records). It updates `global-dict.json` and writes examples and extensions into the spec.
 6. Run `review` again. When nothing is open, it prints `nothing to review`.
