@@ -512,7 +512,7 @@ func TestMatchPath(t *testing.T) {
 	}
 }
 
-// "mandatoryfields": only elements with a value in every listed field
+// "mandatoryFields": only elements with a value in every listed field
 // become records. A segment is a field or a DTO name, which is looked up
 // in the element and below it; in a list one element with a value counts.
 func TestRunSnapshotMandatory(t *testing.T) {
@@ -536,7 +536,7 @@ func TestRunSnapshotMandatory(t *testing.T) {
 		return nil, errors.New("status 404")
 	}
 	run := func(mandatory string, count int) outcome {
-		p := newPipelineFile(t, "mandatory.yaml", fmt.Sprintf(`{"$snapshot": {"Pilot": {"from": "/Pilot", "count": %d, "mandatoryfields": %s}}}`, count, mandatory))
+		p := newPipelineFile(t, "mandatory.yaml", fmt.Sprintf(`{"$snapshot": {"Pilot": {"from": "/Pilot", "count": %d, "mandatoryFields": %s}}}`, count, mandatory))
 		p.fetch = fetch
 		return p.run()
 	}
@@ -559,6 +559,8 @@ func TestRunSnapshotMandatory(t *testing.T) {
 		{`["PilotDetail.License.Expires"]`, 1, "a"},
 		{`["ShipInfo.Callsign"]`, 1, "c"},
 		{`["Ships.Callsign"]`, 1, "c"},
+		{`["pilot.rank"]`, 1, "b"},
+		{`["Pilot.Detail.License.Expires", "Pilot.Rank"]`, 1, "c"},
 	} {
 		o := run(c.mandatory, c.count)
 		if len(o.res.Problems) > 0 || codes(o) != c.want {
@@ -567,11 +569,163 @@ func TestRunSnapshotMandatory(t *testing.T) {
 	}
 
 	o := run(`["Ships.Callsign"]`, 2)
-	if len(o.res.Problems) == 0 || o.res.Problems[0].Code != CodeSnapshotShort || !strings.Contains(o.res.Problems[0].Message, "1 of them have a value") {
+	if len(o.res.Problems) == 0 || o.res.Problems[0].Code != CodeSnapshotShort || !strings.Contains(o.res.Problems[0].Message, "1 pass all of it") {
 		t.Errorf("short: %v", o.res.Problems)
 	}
 	o = run(`["Detail.Licence"]`, 1)
 	if len(o.res.Problems) == 0 || !strings.Contains(o.res.Problems[0].Message, `"Detail.Licence" matches no field`) {
 		t.Errorf("typo: %v", o.res.Problems)
+	}
+}
+
+// "validation": equalFields pick elements with a value, followingDetails
+// must answer for an element with its values; the list is searched until
+// "count" elements pass. The answers become the examples of their
+// operations and the records of their resources.
+func TestRunSnapshotValidation(t *testing.T) {
+	ships := []any{
+		map[string]any{"Id": json.Number("1"), "Code": "aa", "Pilot": "tom"}, // no details
+		map[string]any{"Id": json.Number("2"), "Code": "bb", "Pilot": "ada"}, // wrong pilot
+		map[string]any{"Id": json.Number("3"), "Code": "cc", "Pilot": "tom"}, // no price
+		map[string]any{"Id": json.Number("4"), "Code": "dd", "Pilot": "tom"}, // passes
+		map[string]any{"Id": json.Number("5"), "Code": "ee", "Pilot": "tom"}, // passes
+		map[string]any{"Id": json.Number("6"), "Code": "ff", "Pilot": nil},   // no pilot
+	}
+	var asked []string
+	fetch := func(_ context.Context, path string) (any, error) {
+		asked = append(asked, path)
+		switch path {
+		case "/Ship":
+			return ships, nil
+		case "/Ship/3/details", "/Ship/4/details", "/Ship/5/details":
+			return map[string]any{"Engine": "ion-" + path[6:7], "Decks": json.Number("3")}, nil
+		case "/Ship/3/crew", "/Ship/4/crew", "/Ship/5/crew":
+			return map[string]any{"Captain": "Pilot " + path[6:7]}, nil
+		case "/Ship/dd/price", "/Ship/ee/price":
+			return map[string]any{"Amount": json.Number("120.5"), "Currency": "EUR"}, nil
+		case "/Ship/1/details":
+			return map[string]any{}, nil
+		}
+		for _, s := range ships {
+			if path == "/Ship/"+s.(map[string]any)["Id"].(json.Number).String() {
+				return s, nil
+			}
+		}
+		return nil, errors.New("status 404")
+	}
+	defs := `{"$snapshot": {"Ship": {"from": "/Ship", "count": 2, "validation": {
+		"mandatoryFields": ["Ship.Pilot"],
+		"equalFields": {"Ship.Pilot": "tom"},
+		"followingDetails": ["/Ship/{id}/details", "/Ship/{id}/crew", "/Ship/{code}/price"]}}}}`
+	p := newPipelineFile(t, "details.yaml", defs)
+	p.fetch = fetch
+	o := p.run()
+	if len(o.res.Problems) > 0 || len(o.problems) > 0 {
+		t.Fatalf("problems: %v %v\n%s", o.res.Problems, o.problems, notes(o.res))
+	}
+	var ids []string
+	for _, r := range o.res.Records.Records("Ship") {
+		ids = append(ids, fmt.Sprint(r["Id"]))
+	}
+	if strings.Join(ids, ",") != "4,5" {
+		t.Errorf("records %v", ids)
+	}
+	for _, unasked := range []string{"/Ship/2/details", "/Ship/6/details", "/Ship/ee/price"} {
+		for _, a := range asked {
+			if a == unasked && unasked != "/Ship/ee/price" {
+				t.Errorf("%s asked, the element failed a field check", a)
+			}
+		}
+	}
+	s := o.written
+	if got := field(example(t, s, "GetShipDetails", "200"), "Engine"); got != "ion-4" {
+		t.Errorf("details example: %v", example(t, s, "GetShipDetails", "200"))
+	}
+	if got := field(example(t, s, "GetShipPrice", "200"), "Currency"); got != "EUR" {
+		t.Errorf("price example: %v", example(t, s, "GetShipPrice", "200"))
+	}
+	if param(t, s, "GetShipDetails", "id") != json.Number("4") || param(t, s, "GetShipPrice", "code") != "dd" {
+		t.Errorf("parameters: %v %v", param(t, s, "GetShipDetails", "id"), param(t, s, "GetShipPrice", "code"))
+	}
+	// ShipDetail belongs to Ship (the stem): the details are part of the records
+	if recs := p.dict.Records["Ship"]; len(recs) != 2 || recs[0]["Engine"] != "ion-4" || recs[1]["Engine"] != "ion-5" {
+		t.Errorf("dictionary records: %v", p.dict.Records)
+	}
+
+	// CrewInfo is a resource of its own below Ship: one record per chosen ship
+	if got := field(example(t, s, "GetShipCrew", "200"), "Captain"); got != "Pilot 4" || param(t, s, "GetShipCrew", "id") != json.Number("4") {
+		t.Errorf("crew example: %v", example(t, s, "GetShipCrew", "200"))
+	}
+	if recs := p.dict.Records["CrewInfo"]; len(recs) != 2 || recs[1]["Captain"] != "Pilot 5" {
+		t.Errorf("crew records: %v", p.dict.Records["CrewInfo"])
+	}
+
+	// too few: the reasons are listed
+	p = newPipelineFile(t, "details.yaml", strings.Replace(defs, `"count": 2`, `"count": 3`, 1))
+	p.fetch = fetch
+	o = p.run()
+	if len(o.res.Problems) == 0 || o.res.Problems[0].Code != CodeSnapshotShort ||
+		!strings.Contains(o.res.Problems[0].Message, "4 pass the fields of the validation, 2 pass all of it") ||
+		!strings.Contains(o.res.Problems[0].Message, "GET /Ship/{code}/price failed") {
+		t.Errorf("short: %v", o.res.Problems)
+	}
+
+	// mistakes in the validation stop the run
+	for bad, want := range map[string]string{
+		`"equalFields": {"Ship.Captain": "tom"}`:       `equalFields: "Ship.Captain" matches no field`,
+		`"followingDetails": ["/Ship/{id}/engine"]`:    `"/Ship/{id}/engine" is no GET of the spec`,
+		`"followingDetails": ["/Ship/{hull}/details"]`: `{hull} in "/Ship/{hull}/details" is no field of Ship`,
+	} {
+		p := newPipelineFile(t, "details.yaml", `{"$snapshot": {"Ship": {"from": "/Ship", "validation": {`+bad+`}}}}`)
+		p.fetch = fetch
+		o := p.run()
+		if len(o.res.Problems) == 0 || !strings.Contains(o.res.Problems[0].Message, want) {
+			t.Errorf("%s: %v", bad, o.res.Problems)
+		}
+	}
+}
+
+// A "$snapshot" entry without "from" means: generate, fetch nothing. A list
+// below such a resource is generated too, unless "from" names a request
+// with real values.
+func TestRunSnapshotWithoutFrom(t *testing.T) {
+	var asked []string
+	fetch := func(_ context.Context, path string) (any, error) {
+		asked = append(asked, path)
+		if strings.HasPrefix(path, "/Dock/abc/Ship") {
+			return []any{map[string]any{"Id": json.Number("31"), "Name": "Pilot Ship", "DockId": json.Number("7")}}, nil
+		}
+		if path == "/Ship/id/31" {
+			return map[string]any{"Id": json.Number("31"), "Name": "Pilot Ship", "DockId": json.Number("7")}, nil
+		}
+		return nil, errors.New("status 404")
+	}
+	p := newPipeline(t, `{"$snapshot": {"Dock": {"from": "", "count": 2}}}`)
+	p.fetch = fetch
+	o := p.run()
+	if len(o.res.Problems) > 0 || len(o.problems) > 0 || len(asked) > 0 {
+		t.Fatalf("problems %v %v, requests %v", o.res.Problems, o.problems, asked)
+	}
+	all := notes(o.res)
+	for _, want := range []string{`GENERATED Dock: "$snapshot" has no "from"`, "GENERATED Ship: its list runs below Dock"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("notes lack %q:\n%s", want, all)
+		}
+	}
+	if n := len(o.res.Records.Records("Dock")); n != 2 {
+		t.Errorf("%d Dock records", n)
+	}
+
+	// a request with real values still fetches the ships
+	p = newPipeline(t, `{"$snapshot": {"Dock": {"count": 1}, "Ship": {"from": "/Dock/abc/Ship"}}}`)
+	p.fetch = fetch
+	if o := p.run(); len(o.res.Problems) > 0 || o.res.Records.Records("Ship")[0]["Name"] != "Pilot Ship" {
+		t.Errorf("problems %v, ships %v", o.res.Problems, o.res.Records.Records("Ship"))
+	}
+	// a placeholder for a generated key cannot be filled
+	p = newPipeline(t, `{"$snapshot": {"Dock": {}, "Ship": {"from": "/Dock/{Code}/Ship"}}}`)
+	p.fetch = fetch
+	if o := p.run(); len(o.res.Problems) == 0 || !strings.Contains(o.res.Problems[0].Message, `{Code} in "/Dock/{Code}/Ship" has no value`) {
+		t.Errorf("problems %v", o.res.Problems)
 	}
 }

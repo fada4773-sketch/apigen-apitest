@@ -9,6 +9,7 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 
 	"github.com/fada4773-sketch/apigen-apitest/internal/compare"
+	"github.com/fada4773-sketch/apigen-apitest/internal/gen/defaults"
 	"github.com/fada4773-sketch/apigen-apitest/internal/gen/model"
 	"github.com/fada4773-sketch/apigen-apitest/internal/gen/yamldoc"
 	"github.com/fada4773-sketch/apigen-apitest/internal/spec"
@@ -16,11 +17,11 @@ import (
 
 // source is where the records of a resource are fetched.
 type source struct {
-	op        *model.Op
-	mandatory []string // "mandatoryfields" of "$snapshot"
-	url       string   // the request written in "$snapshot", "" to build it from op
-	count     int
-	explicit  bool // from "$snapshot"
+	op       *model.Op
+	checks   defaults.Validation // "validation" of "$snapshot"
+	url      string              // the request written in "$snapshot", "" to build it from op
+	count    int
+	explicit bool // from "$snapshot"
 }
 
 // path is the request of the source; missing names a placeholder without
@@ -50,7 +51,23 @@ func (b *builder) snapshot(ctx context.Context) {
 		progress = false
 		var rest []*model.Resource
 		for _, r := range pending {
+			if b.store.Fetched(r.Name) { // by the followingDetails of another resource
+				progress = true
+				continue
+			}
 			src, ok := sources[r]
+			if entry, has := b.in.Defaults.SnapshotFor(r.Name); has && strings.TrimSpace(entry.From) == "" {
+				b.generated(r)
+				b.res.note(CodeGenerated, r.Name, "\"$snapshot\" has no \"from\": the records are generated, nothing is fetched")
+				progress = true
+				continue
+			}
+			if parent := b.generatedParent(src); ok && !src.explicit && parent != "" {
+				b.generated(r)
+				b.res.note(CodeGenerated, r.Name, "its list runs below %s, whose records are generated: the records are generated too", parent)
+				progress = true
+				continue
+			}
 			if !ok {
 				b.generated(r)
 				b.res.note(CodeSnapshotEmpty, r.Name, "no GET lists %s with known parameters; its records are generated (set \"$snapshot\": {%q: {\"from\": \"/path?query\"}}, apitest-gen review proposes it)", r.Name, r.Name)
@@ -96,9 +113,12 @@ func (b *builder) snapshot(ctx context.Context) {
 // the list of r with the fewest parameters, all of them keys of a parent.
 func (b *builder) source(r *model.Resource) (source, bool) {
 	if s, ok := b.in.Defaults.SnapshotFor(r.Name); ok {
+		if strings.TrimSpace(s.From) == "" {
+			return source{}, false // generated on purpose
+		}
 		if IsURL(s.From) {
 			src, ok := b.urlSource(r, s.From, s.Records())
-			src.mandatory = s.Mandatory
+			src.checks = s.Checks()
 			return src, ok
 		}
 		o := b.in.Model.OpByID(s.From)
@@ -108,7 +128,7 @@ func (b *builder) source(r *model.Resource) (source, bool) {
 		case o.Resource != r || o.Op.Method != http.MethodGet:
 			b.res.problem(CodeSnapshotFail, "$snapshot."+r.Name, "%s is not a GET of %s", s.From, r.Name)
 		default:
-			return source{op: o, count: s.Records(), explicit: true, mandatory: s.Mandatory}, true
+			return source{op: o, count: s.Records(), explicit: true, checks: s.Checks()}, true
 		}
 		return source{}, false
 	}
@@ -201,40 +221,40 @@ func (b *builder) fetchSource(ctx context.Context, r *model.Resource, src source
 		return
 	}
 	all := len(items)
-	paths := mandatory(src.mandatory)
-	if len(paths) > 0 {
-		ref := itemRef(src.op)
-		for i, p := range paths {
-			if !resolvable(ref, p, 0) {
-				b.res.problem(CodeSnapshotFail, "$snapshot."+r.Name, "mandatoryfields: %q matches no field of the response of %s; check the names", strings.TrimSpace(src.mandatory[i]), src.op.Op.ID)
-			}
-		}
-		if len(b.res.Problems) > 0 {
-			return
-		}
-		var kept []any
-		for _, item := range items {
-			if hasAll(item, ref, paths) {
-				kept = append(kept, item)
-			}
-		}
-		items = kept
+	c, ok := b.compile(r, src)
+	if !ok {
+		return
 	}
-	items = b.selectKeyed(ctx, r, items)
+	var passed []any
+	for _, item := range items {
+		if c.cheap(item) {
+			passed = append(passed, item)
+		}
+	}
+	items = b.selectKeyed(ctx, r, passed)
 	if len(b.res.Problems) > 0 {
 		return
 	}
-	if len(paths) > 0 && len(items) > 0 && !hasAll(items[0], itemRef(src.op), paths) {
-		b.res.problem(CodeSnapshotKey, r.Name, "the %s the defaults select lacks a value in one of mandatoryfields %v", r.Name, src.mandatory)
+	keyed := len(b.keys[strings.ToLower(r.Name)]) > 0
+	if keyed && len(items) > 0 && !c.cheap(items[0]) {
+		b.res.problem(CodeSnapshotKey, r.Name, "the %s the defaults select does not pass %s", r.Name, c.describe())
 		return
 	}
-	if len(items) < src.count {
-		if len(paths) > 0 {
-			b.res.problem(CodeSnapshotShort, r.Name, "GET %s (%s) returned %d elements, %d of them have a value in every one of mandatoryfields %v; \"$snapshot\" asks for %d; add data to the instance, lower \"count\" or check mandatoryfields",
-				path, src.op.Op.ID, all, len(items), src.mandatory, src.count)
+	chosen, answers, reasons := b.choose(ctx, r, c, items, src.count, keyed)
+	if len(b.res.Problems) > 0 {
+		return
+	}
+	if len(chosen) < src.count {
+		if c.active() {
+			msg := fmt.Sprintf("GET %s (%s) returned %d elements, %d pass the fields of the validation, %d pass all of it (%s); \"$snapshot\" asks for %d",
+				path, src.op.Op.ID, all, len(passed), len(chosen), c.describe(), src.count)
+			if reasons != "" {
+				msg += "; rejected " + reasons
+			}
+			b.res.problem(CodeSnapshotShort, r.Name, "%s; add data to the instance, lower \"count\" or check the validation", msg)
 			return
 		}
-		if src.explicit || len(items) > 0 {
+		if src.explicit || len(chosen) > 0 {
 			b.res.problem(CodeSnapshotShort, r.Name, "GET %s (%s) returned %d elements, \"$snapshot\" asks for %d; add data to the instance or lower \"count\"", path, src.op.Op.ID, len(items), src.count)
 			return
 		}
@@ -245,6 +265,8 @@ func (b *builder) fetchSource(ctx context.Context, r *model.Resource, src source
 		b.res.note(CodeSnapshotEmpty, r.Name, "GET %s (%s) returned no elements: the test starts without %s records, the examples show only the ones it creates", path, src.op.Op.ID, r.Name)
 		return
 	}
+	b.keepDetails(r, c, chosen, answers)
+	items = chosen
 	var recs []Record
 	for _, item := range items[:src.count] {
 		recs = append(recs, toRecord(r, item))
@@ -252,12 +274,12 @@ func (b *builder) fetchSource(ctx context.Context, r *model.Resource, src source
 	b.fit(r, recs, true)
 	b.store.set(r, recs)
 	b.store.fetched[strings.ToLower(r.Name)] = true
-	b.store.lists[src.op.Op.ID] = items[:min(len(items), src.count)]
-	if len(paths) > 0 {
-		b.res.note(CodeSnapshot, r.Name, "%d of %d elements from GET %s (%s); %d have every one of mandatoryfields %v", src.count, all, path, src.op.Op.ID, len(items), src.mandatory)
+	b.store.lists[src.op.Op.ID] = items
+	if c.active() {
+		b.res.note(CodeSnapshot, r.Name, "%d of %d elements from GET %s (%s) that pass %s", src.count, all, path, src.op.Op.ID, c.describe())
 		return
 	}
-	b.res.note(CodeSnapshot, r.Name, "%d of %d elements from GET %s (%s)", src.count, len(items), path, src.op.Op.ID)
+	b.res.note(CodeSnapshot, r.Name, "%d of %d elements from GET %s (%s)", src.count, all, path, src.op.Op.ID)
 }
 
 // selectKeyed moves the element whose keys the defaults set to the front.
@@ -313,8 +335,8 @@ func (b *builder) complete(ctx context.Context, r *model.Resource, src source) {
 	ignore := b.in.Defaults.RunConfig().IgnoreFields
 	for i, rec := range recs {
 		for _, o := range r.OpsWith(model.RoleRead) {
-			if o == src.op {
-				continue
+			if o == src.op || (i > 0 && !ownKey(o)) {
+				continue // a read without own key only addresses the first record
 			}
 			path, missing := b.target(o, rec)
 			if missing != "" {
@@ -460,4 +482,29 @@ func (b *builder) keyRecord(r *model.Resource) Record {
 		rec[f] = k.value
 	}
 	return rec
+}
+
+// ownKey reports whether o addresses a record by a key of its own resource.
+func ownKey(o *model.Op) bool {
+	for _, p := range o.Params {
+		if p.Resource == o.Resource {
+			return true
+		}
+	}
+	return false
+}
+
+// generatedParent names a resource the source takes a key from whose
+// records are generated: such a key does not exist in the instance.
+func (b *builder) generatedParent(src source) string {
+	if src.op == nil {
+		return ""
+	}
+	for _, mp := range src.op.Params {
+		name := mp.Resource.Name
+		if mp.Resource != src.op.Resource && b.store.has(name) && !b.store.Fetched(name) {
+			return name
+		}
+	}
+	return ""
 }

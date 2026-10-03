@@ -151,7 +151,8 @@ func (b *builder) paramValue(o *model.Op, p *openapi3.Parameter, rec Record, exa
 			}
 			return nil
 		}
-		if recs := b.store.Records(mp.Resource.Name); len(recs) > 0 {
+		// a generated key does not exist in the instance
+		if recs := b.store.Records(mp.Resource.Name); len(recs) > 0 && (b.in.Fetch == nil || b.store.Fetched(mp.Resource.Name)) {
 			return recs[0][mp.Field]
 		}
 		return nil

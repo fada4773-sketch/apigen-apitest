@@ -34,6 +34,26 @@ func newWriter(in Input, res *Result, store *Store) *writer {
 		params: map[*yaml.Node]written{}, media: map[*yaml.Node]written{}}
 }
 
+// fetched writes the answers of followingDetails into operations of no
+// resource.
+func (w *writer) fetched() {
+	for _, id := range sortedKeys(w.store.examples) {
+		op := w.in.Spec.Op(id)
+		if op == nil || w.in.Model.Op(op) != nil {
+			continue
+		}
+		for _, pl := range responsePlaces(w.in.Doc, op) {
+			if pl.success && !pl.named {
+				w.media1(pl, w.store.examples[id], spec.ModeResponse, id)
+				break
+			}
+		}
+		for _, name := range sortedKeys(w.store.params[id]) {
+			w.param(op, name, w.store.params[id][name])
+		}
+	}
+}
+
 func (w *writer) write(steps []*step) {
 	for _, s := range steps {
 		w.parameters(s)

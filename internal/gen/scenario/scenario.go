@@ -28,6 +28,7 @@ const (
 	CodeRecord        = "RECORD"            // the records of a resource
 	CodeSnapshot      = "SNAPSHOT"          // records fetched from the instance
 	CodeSnapshotEmpty = "SNAPSHOT_EMPTY"    // a list returned nothing, records are generated
+	CodeGenerated     = "GENERATED"         // records generated on purpose: "$snapshot" without "from"
 	CodeSnapshotShort = "SNAPSHOT_SHORT"    // fewer elements than "count"
 	CodeSnapshotFail  = "SNAPSHOT_FAILED"   // a request of the snapshot failed
 	CodeSnapshotDiff  = "SNAPSHOT_MISMATCH" // two responses disagree about a record
@@ -137,6 +138,7 @@ func Run(ctx context.Context, in Input) *Result {
 	}
 	w := newWriter(in, res, b.store)
 	w.write(steps)
+	w.fetched()
 	w.messages()
 	return res
 }

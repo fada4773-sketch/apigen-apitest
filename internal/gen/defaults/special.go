@@ -25,14 +25,40 @@ type Snapshot struct {
 	Count int    `json:"count"` // records taken from the list; 0 means 1
 	// Comment is free text; review writes the path template there.
 	Comment string `json:"$comment,omitempty"`
-	// Mandatory are fields every fetched record must have, not null and
-	// not empty: "author" or "ReadDTO.BookDetail.Author". review writes
-	// the key empty.
-	Mandatory []string `json:"mandatoryfields,omitempty"`
+	// Validation selects the elements that become records.
+	Validation *Validation `json:"validation,omitempty"`
+	// Mandatory is the place of "mandatoryFields" before "validation"; it
+	// still works and adds to Validation.MandatoryFields.
+	Mandatory []string `json:"mandatoryFields,omitempty"`
+}
+
+// Validation is what an element of the list must fulfil to become a record.
+// The list is searched until "count" elements fulfil all of it.
+type Validation struct {
+	// MandatoryFields must have a value, not null and not empty:
+	// "Book.Author" or "ReadDTO.BookDetail.Author".
+	MandatoryFields []string `json:"mandatoryFields"`
+	// EqualFields must have exactly this value: {"Book.Author": "tom"}.
+	EqualFields map[string]any `json:"equalFields"`
+	// FollowingDetails are requests that must answer for the element, with
+	// its values for the placeholders: "/book/{id}/details". Their answers
+	// become the examples of those operations.
+	FollowingDetails []string `json:"followingDetails"`
 }
 
 // Records is the number of records, at least 1.
 func (s Snapshot) Records() int { return max(s.Count, 1) }
+
+// Checks returns the validation of s, with "mandatoryFields" of the old
+// place added.
+func (s Snapshot) Checks() Validation {
+	var v Validation
+	if s.Validation != nil {
+		v = *s.Validation
+	}
+	v.MandatoryFields = append(append([]string(nil), v.MandatoryFields...), s.Mandatory...)
+	return v
+}
 
 // ModelFix corrects the detected model of one resource.
 type ModelFix struct {
@@ -95,6 +121,7 @@ func (d *Defaults) special(key string, raw json.RawMessage) (handled bool, err e
 func strict(raw json.RawMessage, v any) error {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
+	dec.UseNumber()
 	return dec.Decode(v)
 }
 

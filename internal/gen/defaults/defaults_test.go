@@ -1,6 +1,7 @@
 package defaults
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -226,5 +227,23 @@ func TestSpecialKeysMerge(t *testing.T) {
 	}
 	if r := d.RunConfig(); r.DeleteLast || r.MethodOrder[0] != "PUT" {
 		t.Errorf("$apitest of the later file replaces the earlier one: %+v", r)
+	}
+}
+
+func TestSnapshotValidation(t *testing.T) {
+	d, err := Parse([]byte(`{"$snapshot": {"Book": {"from": "/Book", "mandatoryFields": ["Isbn"], "validation": {
+		"mandatoryFields": ["Book.Author"], "equalFields": {"Book.Author": "tom", "Book.Pages": 120},
+		"followingDetails": ["/book/{id}/details"]}}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, _ := d.SnapshotFor("Book")
+	v := s.Checks()
+	if strings.Join(v.MandatoryFields, ",") != "Book.Author,Isbn" || v.EqualFields["Book.Author"] != "tom" ||
+		fmt.Sprint(v.EqualFields["Book.Pages"]) != "120" || v.FollowingDetails[0] != "/book/{id}/details" {
+		t.Errorf("checks: %+v", v)
+	}
+	if _, err := Parse([]byte(`{"$snapshot": {"Book": {"from": "/Book", "validation": {"mandatory": []}}}}`)); err == nil {
+		t.Error("an unknown field in validation is accepted")
 	}
 }

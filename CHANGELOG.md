@@ -109,11 +109,20 @@ contain breaking changes, which are listed here.
   unknown ones as `{level}` and writes the path template, the filled values
   and their source into `"$comment"`. A list with a path parameter of
   unknown meaning is no automatic source any more.
-- `"mandatoryfields"` in `"$snapshot"`: only elements with a value (not
-  null, not empty) in every listed field become records. Paths may name
-  fields and DTOs (`BookRead.BookDetail.Author`); a DTO name continues at
-  the object of that type, in the element or below it. A path that matches
-  no field stops the run. `review` writes the key empty.
+- `"validation"` in `"$snapshot"` selects the records: `mandatoryFields`
+  (set, not empty), `equalFields` (`{"Book.Author": "tom"}`) and
+  `followingDetails` (`"/book/{id}/details"` must answer for the element,
+  with its values in the placeholders). The list is searched until `count`
+  elements pass. The answers of the detail requests become data too:
+  fields of the same resource, records of another resource, or the example
+  of an operation of no resource. Field paths may name fields, DTOs and
+  resources (`Book.Author`, `BookRead.BookDetail.Author`). A path or
+  request that fits nothing in the spec stops the run. `review` writes the
+  block empty.
+- A `"$snapshot"` entry without `from` generates the records of that
+  resource and fetches nothing, also with `-base-url` (`GENERATED`); for
+  endpoints apitest does not test that only need a valid example. Lists
+  below it are generated too.
 - The model takes an object with one list for a page only with a list
   field like `items` or a DTO named `…Page`/`…List`; a Pilot with its
   Ships stays a read of the Pilot.

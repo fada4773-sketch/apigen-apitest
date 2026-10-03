@@ -985,17 +985,51 @@ If something is detected wrongly, correct it in `defaults.json`:
 
 `from` is the request relative to `-base-url`, with its query. `GET ` in front is allowed, and so is an operationId (`"from": "GetBooks"`), which then sends that GET with the known parameters. The request must fit a GET of the resource in the spec, otherwise the run stops. Placeholders left in it are filled where the value is known: a key of another resource from its first record (`{Code}` of the first Book), a default (`"GetDefaultBooks.level"` or `"level"`). An optional query parameter without value is left out; a path or required query parameter without value stops the run with `{level} in "/DefaultBook/Level/{level}" has no value`. `$comment` is free text.
 
-**Mandatory fields.** `"mandatoryfields"` lists fields every record must have, with a value that is not null, not `""` and not an empty list. Only such elements are taken; the first `count` of them become the records:
+**Validation.** `"validation"` decides which elements of the list become records. The list is searched in order until `count` elements pass every check:
 
 ```json
 "Book": {
   "from": "/DefaultBook/Level/A1",
-  "count": 2,
-  "mandatoryfields": ["Author", "ExpireDate", "BookRead.BookDetail.Author"]
+  "count": 5,
+  "validation": {
+    "mandatoryFields": ["Book.Author", "BookRead.BookDetail.ExpireDate"],
+    "equalFields": { "Book.Author": "tom" },
+    "followingDetails": ["/book/{id}/details", "/book/{code}/price"]
+  }
 }
 ```
 
-A field is a path with dots. Each segment is a field name (case does not matter) or the name of a DTO. For a DTO name, the path continues at the object of that DTO: the element itself (`BookRead`, also through `allOf`), or the first object of that type below it. So `BookRead.BookDetail.Author`, `BookDetail.Author` and `Author` inside a `BookDetail` can all be written. In a list one element with a value is enough (`Ships.Callsign`). A path that matches no field of the response schema stops the run (a typo); too few matching elements stop it with `SNAPSHOT_SHORT … 1 of them have a value in every one of mandatoryfields`. A key default (`"GetBook.Code": "abc"`) must select an element that has the fields. `review` writes the key empty (`[]`); empty strings in the list are ignored.
+| Check | An element passes if |
+|---|---|
+| `mandatoryFields` | every field has a value: not missing, not null, not `""`, not an empty list |
+| `equalFields` | every field has exactly this value (JSON value; a number also equals its text, `"7"` and `7`) |
+| `followingDetails` | every request answers for this element with a 2xx, a body that is not empty and fits the schema of that GET in the spec. The placeholders take the values of the element: `{id}` the field the model maps the parameter to (`/book/{id}` → `Book.Id`), else the field of the same name (`{code}` → `Code`). |
+
+The field checks need no request, so only elements that pass them are asked for their details. With `GetBooks` returning 100 books and `count: 5`, apitest-gen asks the details book by book until 5 books pass. Too few stop the run with the numbers and the reasons:
+
+```text
+FATAL SNAPSHOT_SHORT Book: GET /DefaultBook/Level/A1 (GetBooks) returned 100 elements, 7 pass the fields of the validation, 3 pass all of it (…); "$snapshot" asks for 5; rejected 4: GET /book/{code}/price failed (status 404)
+```
+
+**Field paths** have dots. Each segment is a field name (case does not matter), the name of a DTO, or the name of a resource (`Book` for `BookRead`). For a DTO name, the path continues at the object of that DTO: the element itself (`BookRead`, also through `allOf`), or the first object of that type below it. So in a list of `BookRead`, `Book.Author`, `BookRead.Author` and `Author` mean the same field, and `BookRead.BookDetail.Author`, `BookDetail.Author` reach into a `BookDetail`. In a list one element is enough (`Ships.Callsign`). A field path that matches no field of the response schema, a request in `followingDetails` that fits no GET of the spec, and a placeholder the element has no field for stop the run before the list is searched.
+
+**The answers of `followingDetails` are examples too.** The request `/book/{id}/details` fits a GET of the spec, and its answer becomes data where it belongs:
+
+- an answer of the same resource (`BookDetails` is `Book` by its stem): its fields are added to the record of the book;
+- an answer of another resource (`CrewInfo` below `Book`): one record per chosen book, so the GET, its path parameter and the other operations of that resource follow it;
+- an answer of no resource (an inline schema): the example of that operation, and its path parameters get the values that were asked.
+
+The records and the DTO values are kept in `global-dict.json` as usual.
+
+A key default (`"GetBook.Code": "abc"`) must select an element that passes. `review` writes `validation` with empty lists; empty strings in `mandatoryFields` are ignored. `"mandatoryFields"` directly in the entry, without `validation`, still works.
+
+**Generated on purpose.** An entry without `from` (left out or `""`) means: generate the records of this resource with the generator (dictionary, faker, patterns), fetch nothing, also with `-base-url`. Use it for endpoints apitest does not test that only need some valid example, e.g. for linting:
+
+```json
+"$snapshot": { "Report": { "count": 1 } }
+```
+
+The run notes `GENERATED Report: "$snapshot" has no "from"`. `validation` is not used then. A list below such a resource (`/Report/{Code}/Line`) is generated as well, because its key does not exist in the instance (`GENERATED Line: its list runs below Report`); a `from` with a real value (`/Report/R1/Line`) still fetches it, a placeholder for the generated key (`/Report/{Code}/Line`) stops the run.
 
 `count` is 1 if left out. Every fetched element is validated against the schema of the response; a violation, a failing request or fewer elements than `count` stop the run, and nothing is written. An empty list means the test starts without such records (`SNAPSHOT_EMPTY`): the examples then show only the records the test creates. `-token-env` and `-header` apply as for `discover`.
 
@@ -1078,7 +1112,7 @@ A JSON object. Keys are compared without regard to case; two keys that differ on
 | `operationId.x-name` | `"scrapShip.x-apitest-verify": false` | an extension on the operation |
 | `operationId.param` with `bind` | `"bookDock.dockCode": {"bind": "listDocks", "pointer": "/0/DockCode"}` | where apitest takes the parameter from at run time |
 | any key with `from` | `"DockCode": {"from": "GET /docks", "pick": "/[Active=true]/DockCode"}` | a value fetched by `discover` or `-base-url`, then used like a plain value |
-| `$snapshot` | `{"Book": {"from": "/DefaultBook/Level/A1", "count": 3, "mandatoryfields": ["Author"]}}` | the request the records of a resource are fetched with, with `-base-url`, and the fields they must have (13.5) |
+| `$snapshot` | `{"Book": {"from": "/DefaultBook/Level/A1", "count": 3, "validation": {…}}}` | the request the records of a resource are fetched with, with `-base-url`, and what they must fulfil (13.5) |
 | `$model` | `{"Book": {"keys": ["Isbn"]}}` | corrections of the resource model (13.5) |
 | `$apitest` | `{"MethodOrder": ["POST", "PUT", "GET", "DELETE"], "DeleteLast": true}` | the apitest Config that orders the cases; must match the test (13.5) |
 
@@ -1306,6 +1340,7 @@ Problems are always listed; messages marked *info* only with `-v`.
 | `FATAL BIND_INVALID` | apply | a binding names an unknown operation | fix the operationId |
 | `RECORD` | records | the records of a resource (keys) | – |
 | `SNAPSHOT` | records | records fetched from `-base-url` | – |
+| `GENERATED` | records | records generated on purpose: `"$snapshot"` without `from`, or a list below such a resource | – |
 | `SNAPSHOT_EMPTY` | records | a list returned nothing: the test starts without such records; or no list without own keys exists, the records are generated | add data, or set `$snapshot` |
 | `SNAPSHOT_WINS` | records | a field default is not used for a fetched record | remove the default, or change the data |
 | `UPDATE` *info* | records | an update changes a record: old and new values | – |
@@ -1377,7 +1412,7 @@ defaults.json: 3 entries added; check them, change or delete what is wrong, then
 | Finding | Source | Fix |
 |---|---|---|
 | `heuristic`: a parameter resolved heuristically | apitest report | nothing: the examples follow the heuristic (13.5) |
-| the resources of the spec | `review` | `DEFAULT` `"$snapshot"` (with an empty `"mandatoryfields": []` to fill in) with the request each resource is fetched with, if the defaults have none (`SNAPSHOT_SOURCE`). Parameters with a known value are filled in: the key of a record of the last run, a default, or a record field of the same name (`bookCode` → `Code` of the first Book). The others stay placeholders (`{level}`); keys of a parent are filled by the snapshot itself. `$comment` holds the operationId and the path template with all parameters, which values were filled and from where, and what is left to replace. `ORDER` if `"$apitest"` is missing |
+| the resources of the spec | `review` | `DEFAULT` `"$snapshot"` (with an empty `"validation"` to fill in) with the request each resource is fetched with, if the defaults have none (`SNAPSHOT_SOURCE`). Parameters with a known value are filled in: the key of a record of the last run, a default, or a record field of the same name (`bookCode` → `Code` of the first Book). The others stay placeholders (`{level}`); keys of a parent are filled by the snapshot itself. `$comment` holds the operationId and the path template with all parameters, which values were filled and from where, and what is left to replace. `ORDER` if `"$apitest"` is missing |
 | `binding`: a link to an unknown operation or parameter | apitest report | `SPEC`, with the closest operationId (`did you mean "getDock"?`) |
 | `auth`: `x-apitest-forbidden` without a 403 response | apitest report | `DEFAULT` `"<operationId>.x-apitest-forbidden": false`, or document a 403 |
 | `auth`: a secured operation without 401 or 403 | apitest report | `SPEC` with the response to add, or `Config.SkipAuthCases` |
@@ -1403,7 +1438,7 @@ The Swagger 2.0 conversion note needs no fix and is not listed.
 {
   "PilotEmail": "test@starport.example",
   "getShip.x-apitest-forbidden": false,
-  "$snapshot": { "Dock": { "from": "/docks?zone={zone}", "count": 1, "mandatoryfields": [], "$comment": "listDocks: /docks?zone={zone}; replace {zone} with values that exist in the instance" } },
+  "$snapshot": { "Dock": { "from": "/docks?zone={zone}", "count": 1, "validation": { "mandatoryFields": [], "equalFields": {}, "followingDetails": [] }, "$comment": "listDocks: /docks?zone={zone}; replace {zone} with values that exist in the instance" } },
   "/pilots/{id}": 275
 }
 ```
@@ -1419,7 +1454,7 @@ The Swagger 2.0 conversion note needs no fix and is not listed.
 
 1. Run `apitest-gen review -spec openapi.yaml` (with `-v` for the reasons).
 2. Check the model `review` printed. Correct it with `"$model"` if a resource, a key or a role is wrong. Copy `MethodOrder`, `DeleteLast` and `Tags` of your test into `"$apitest"`.
-3. Open `defaults.json` and check the new entries at the end: in `$snapshot` compare `from` with the template in `$comment`, replace what is left as `{…}` with values that exist, set `count`, add the fields a record must have to `mandatoryfields`; then the values. Replace fixed ids with ids that exist. Delete what is wrong and add its key to `$rejected`.
+3. Open `defaults.json` and check the new entries at the end: in `$snapshot` compare `from` with the template in `$comment`, replace what is left as `{…}` with values that exist, set `count`, fill `validation` (fields that must be set, fields with a fixed value, detail requests that must answer); then the values. Replace fixed ids with ids that exist. Delete what is wrong and add its key to `$rejected`.
 4. Fix what was printed as `EDIT` and `SPEC`.
 5. Run `apitest-gen -spec openapi.yaml -base-url <instance>` (or without `-base-url` for generated records). It updates `global-dict.json` and writes examples and extensions into the spec.
 6. Run `review` again. When nothing is open, it prints `nothing to review`.

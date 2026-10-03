@@ -24,10 +24,14 @@ type Store struct {
 	records map[string][]Record
 	lists   map[string][]any
 	fetched map[string]bool
+	// examples are fetched answers of operations of no resource, by
+	// operationId (followingDetails)
+	examples map[string]any
+	params   map[string]map[string]any // their path and query parameter values
 }
 
 func newStore() *Store {
-	return &Store{records: map[string][]Record{}, lists: map[string][]any{}, fetched: map[string]bool{}}
+	return &Store{records: map[string][]Record{}, lists: map[string][]any{}, fetched: map[string]bool{}, examples: map[string]any{}, params: map[string]map[string]any{}}
 }
 
 // Records returns the records of a resource.
@@ -40,6 +44,13 @@ func (s *Store) Records(resource string) []Record {
 func (s *Store) Fetched(resource string) bool { return s.fetched[strings.ToLower(resource)] }
 
 func (s *Store) set(r *model.Resource, recs []Record) { s.records[strings.ToLower(r.Name)] = recs }
+
+// has reports whether the records of a resource are made, fetched or
+// generated.
+func (s *Store) has(resource string) bool {
+	_, ok := s.records[strings.ToLower(resource)]
+	return ok
+}
 
 // builder creates the records.
 type builder struct {

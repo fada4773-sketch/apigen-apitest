@@ -179,7 +179,8 @@ func (r *reviewer) snapshot() {
 			comment += "; replace {" + strings.Join(missing, "}, {") + "} with values that exist in the instance"
 			open = append(open, res.Name)
 		}
-		v[res.Name] = map[string]any{"from": target, "count": 1, "$comment": comment, "mandatoryfields": []string{}}
+		v[res.Name] = map[string]any{"from": target, "count": 1, "$comment": comment,
+			"validation": map[string]any{"mandatoryFields": []string{}, "equalFields": map[string]any{}, "followingDetails": []string{}}}
 		names = append(names, res.Name)
 	}
 	if len(v) == 0 {
