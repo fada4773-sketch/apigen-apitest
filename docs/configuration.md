@@ -876,9 +876,11 @@ Exit codes: `0` success, `1` a problem (fatal defaults, `check` findings, a file
 | `-out <file>` | `defaults.resolved.json` | discover | File for the fetched values. |
 | `-seed <n>` | `42` | apply, dict, review | Seed for **new** values. The same seed and field always give the same value; existing values are never touched by the seed. |
 | `-repair` | off | apply, dict | Regenerate dictionary values that no longer fit their schema. Without it they are kept and reported. |
-| `-overwrite` | off | apply | Replace valid existing examples too, not only missing or invalid ones. Named `examples` are never replaced. |
+| `-overwrite` | off | apply | Replace valid existing examples too, not only missing or invalid ones. Named `examples` are never replaced. On with `-base-url`. |
 | `-generic-ids <names>` | `id,uuid,key` | apply, review | Path parameter names that mean another resource on every path (see [13.6](#136-generic-path-ids)). |
 | `-check` | off | apply | Check the written spec afterwards; exit code 1 on problems. |
+| `-debug` | off | apply | Save `global-dict.json` even if the run fails (problems of the defaults, the snapshot or verify). The spec is not written; the exit code stays 1. |
+| `-ignorelinting` | off | apply | Fetched data and examples that violate their schema, and examples that do not show their record, are listed as `LINT_IGNORED` instead of stopping the run; the spec is written with them. Problems of the defaults still stop the run (see [13.9](#139-verify-before-saving)). |
 | `-base-url <url>` | – | apply, discover | Running instance (the same base URL as `Config.BaseURL`). apply fetches the records of every resource from it (GET only, see 13.5) and the sources of the defaults; discover only the sources. |
 | `-token-env <name>` | – | apply, discover | Environment variable with a bearer token for `-base-url`. The token is never printed. |
 | `-header "Name: value"` | – | apply, discover | Extra header for `-base-url`; repeatable. |
@@ -907,7 +909,7 @@ Comments, key order and block style of the YAML are kept; JSON files stay JSON. 
 For every place, the first source with a value wins:
 
 1. **`defaults.json`**: a matching key (13.7), adjusted to the type if needed. It wins over everything, also inside existing examples.
-2. **An existing example** that fits its schema (unless `-overwrite`).
+2. **An existing example** that fits its schema (unless `-overwrite`; never with `-base-url`: a snapshot takes nothing from the examples of the spec, neither for the examples nor for the parameters of its requests).
 3. **The dictionary**: the value of this DTO field or parameter.
 
 Values in the dictionary are created once and then kept:
@@ -983,7 +985,7 @@ If something is detected wrongly, correct it in `defaults.json`:
 }
 ```
 
-`from` is the request relative to `-base-url`, with its query. `GET ` in front is allowed, and so is an operationId (`"from": "GetBooks"`), which then sends that GET with the known parameters. The request must fit a GET of the resource in the spec, otherwise the run stops. Placeholders left in it are filled where the value is known: a key of another resource from its first record (`{Code}` of the first Book), a default (`"GetDefaultBooks.level"` or `"level"`). An optional query parameter without value is left out; a path or required query parameter without value stops the run with `{level} in "/DefaultBook/Level/{level}" has no value`. `$comment` is free text.
+`from` is the request relative to `-base-url`, with its query. `GET ` in front is allowed, and so is an operationId (`"from": "GetBooks"`), which then sends that GET with the known parameters. The request must fit a GET of the resource in the spec, otherwise the run stops. Placeholders left in it are filled where the value is known: a key of another resource from its first record (`{Code}` of the first Book), a default (`"GetDefaultBooks.level"` or `"level"`). Parameter examples of the spec are never used. An optional query parameter without value is left out; a path or required query parameter without value stops the run with `{level} in "/DefaultBook/Level/{level}" has no value`. `$comment` is free text.
 
 **Validation.** `"validation"` decides which elements of the list become records. The list is searched in order until `count` elements pass every check:
 
@@ -1031,7 +1033,7 @@ A key default (`"GetBook.Code": "abc"`) must select an element that passes. `rev
 
 The run notes `GENERATED Report: "$snapshot" has no "from"`. `validation` is not used then. A list below such a resource (`/Report/{Code}/Line`) is generated as well, because its key does not exist in the instance (`GENERATED Line: its list runs below Report`); a `from` with a real value (`/Report/R1/Line`) still fetches it, a placeholder for the generated key (`/Report/{Code}/Line`) stops the run.
 
-`count` is 1 if left out. Every fetched element is validated against the schema of the response; a violation, a failing request or fewer elements than `count` stop the run, and nothing is written. An empty list means the test starts without such records (`SNAPSHOT_EMPTY`): the examples then show only the records the test creates. `-token-env` and `-header` apply as for `discover`.
+`count` is 1 if left out. Every fetched element that passes the fields of the validation is validated against the schema of the response; elements the validation rejects are not (an empty `{}` in the list is skipped with `"mandatoryFields": ["Code"]`). A violation, a failing request or fewer elements than `count` stop the run, and nothing is written; with `-ignorelinting` a violation is listed as `LINT_IGNORED` and the element is used. An empty list means the test starts without such records (`SNAPSHOT_EMPTY`): the examples then show only the records the test creates. `-token-env` and `-header` apply as for `discover`.
 
 **Without `-base-url`** the first record is built from the examples apply wrote (a list element first, then the reads, then the bodies), so it comes from the dictionary and the defaults. Further records (`count`) get new values. The records are kept in the dictionary (13.8) and reused on the next run, so the examples stay the same.
 
@@ -1291,7 +1293,7 @@ The last check does not reuse how the examples were made: it takes the parameter
   EXAMPLE_STALE Book/GetBook/default expects Name = "Brazilian Book", but Book #1 has "Golden Book" at this point (changed by Book/UpdateBook/default)
 ```
 
-With any problem, the problems are listed, the temporary file is removed, and the run exits with 1. **Nothing is written:** the spec, the dictionary and the defaults stay as they were.
+With any problem, the problems are listed, the temporary file is removed, and the run exits with 1. **Nothing is written:** the spec, the dictionary and the defaults stay as they were. With `-debug` the dictionary is saved anyway; with `-ignorelinting` `EXAMPLE_SCHEMA`, `EXAMPLE_STALE` and `PARAM_NO_RECORD` are listed as `LINT_IGNORED` and do not stop the run.
 
 ```text
 verify: the defaults do not fit the written spec

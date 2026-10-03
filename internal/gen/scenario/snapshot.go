@@ -217,9 +217,6 @@ func (b *builder) fetchSource(ctx context.Context, r *model.Resource, src source
 		}
 		items = list
 	}
-	if !b.checkItems(src.op, items, path) {
-		return
-	}
 	all := len(items)
 	c, ok := b.compile(r, src)
 	if !ok {
@@ -230,6 +227,11 @@ func (b *builder) fetchSource(ctx context.Context, r *model.Resource, src source
 		if c.cheap(item) {
 			passed = append(passed, item)
 		}
+	}
+	// only elements the validation keeps must fit the schema: the ones it
+	// rejects ({} in a list) never become examples
+	if !b.checkItems(src.op, passed, path) {
+		return
 	}
 	items = b.selectKeyed(ctx, r, passed)
 	if len(b.res.Problems) > 0 {
@@ -382,8 +384,12 @@ func (b *builder) complete(ctx context.Context, r *model.Resource, src source) {
 			continue
 		}
 		items, ok := listItems(body, o.Items)
-		if ok && b.checkItems(o, items, path) {
-			b.store.lists[o.Op.ID] = items[:min(len(items), len(recs))]
+		if !ok {
+			continue
+		}
+		// only the elements the example shows must fit the schema
+		if kept := items[:min(len(items), len(recs))]; b.checkItems(o, kept, path) {
+			b.store.lists[o.Op.ID] = kept
 		}
 	}
 }
@@ -396,9 +402,10 @@ func (b *builder) checkItems(o *model.Op, items []any, path string) bool {
 	}
 	for i, item := range items {
 		if errs := b.validator().Validate(s, spec.Normalize(item), spec.ModeResponse); len(errs) > 0 {
-			b.res.problem(CodeSnapshotFail, o.Resource.Name, "GET %s (%s): element %d violates the schema (%s: %s); the spec or the instance is wrong",
-				path, o.Op.ID, i, errs[0].Pointer, errs[0].Reason)
-			return false
+			if !b.res.lint(b.in.IgnoreLinting, CodeSnapshotFail, o.Resource.Name, "GET %s (%s): element %d violates the schema (%s: %s); the spec or the instance is wrong",
+				path, o.Op.ID, i, errs[0].Pointer, errs[0].Reason) {
+				return false
+			}
 		}
 	}
 	return true

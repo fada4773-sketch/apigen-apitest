@@ -16,6 +16,16 @@ contain breaking changes, which are listed here.
 
 ### Features
 
+- `apitest-gen -debug` saves `global-dict.json` even if the run fails; the
+  spec stays unchanged.
+- `apitest-gen -ignorelinting` lists fetched data and examples that violate
+  their schema as `LINT_IGNORED` instead of stopping the run.
+- `"$snapshot"` validation: elements that `mandatoryFields` or
+  `equalFields` reject are no longer checked against the schema, so an
+  empty `{}` in a list no longer stops the run.
+- With `-base-url` nothing is taken from the examples of the spec: existing
+  examples are replaced (as with `-overwrite`) and the requests of the
+  snapshot no longer fill placeholders from parameter examples.
 - `apitest-gen` (preview), a command line tool next to the library:
   `apitest-gen dict -spec openapi.yaml -dict global-dict.json` creates or
   updates a global dictionary with one node per DTO field and parameter.

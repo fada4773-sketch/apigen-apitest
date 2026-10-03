@@ -30,6 +30,8 @@ type pipeline struct {
 	defs string
 	// fetch is used instead of generated records
 	fetch Fetcher
+	// ignoreLinting is Input.IgnoreLinting
+	ignoreLinting bool
 }
 
 type outcome struct {
@@ -96,7 +98,7 @@ func (p *pipeline) run() outcome {
 	mid := filepath.Join(filepath.Dir(p.path), "mid.yaml")
 	p.save(doc, mid)
 	ms := p.load(mid)
-	res := Run(context.Background(), Input{Doc: doc, Spec: ms, Dict: d, Defaults: defs, Model: model.Detect(ms, defs.Model), Seed: 1, Fetch: p.fetch})
+	res := Run(context.Background(), Input{Doc: doc, Spec: ms, Dict: d, Defaults: defs, Model: model.Detect(ms, defs.Model), Seed: 1, Fetch: p.fetch, IgnoreLinting: p.ignoreLinting})
 	o := outcome{res: res}
 	if len(res.Problems) > 0 {
 		return o
@@ -576,6 +578,49 @@ func TestRunSnapshotMandatory(t *testing.T) {
 	if len(o.res.Problems) == 0 || !strings.Contains(o.res.Problems[0].Message, `"Detail.Licence" matches no field`) {
 		t.Errorf("typo: %v", o.res.Problems)
 	}
+}
+
+// Elements the validation rejects need not fit the schema: an empty object
+// in the list is skipped, not a broken instance. A kept element that
+// violates the schema still stops the run, unless IgnoreLinting.
+func TestRunSnapshotValidationSkipsInvalid(t *testing.T) {
+	list := []any{map[string]any{}, map[string]any{"Code": "a", "Rank": json.Number("1")}, map[string]any{}}
+	fetch := func(_ context.Context, path string) (any, error) {
+		if path == "/Pilot" {
+			return list, nil
+		}
+		return list[1], nil
+	}
+	run := func(validation string, ignore bool) outcome {
+		p := newPipelineFile(t, "mandatory.yaml", `{"$snapshot": {"Pilot": {"from": "/Pilot", "validation": `+validation+`}}}`)
+		p.fetch = fetch
+		p.ignoreLinting = ignore
+		return p.run()
+	}
+	for _, v := range []string{`{"mandatoryFields": ["Code"]}`, `{"equalFields": {"Rank": 1}}`} {
+		o := run(v, false)
+		recs := o.res.Records.Records("Pilot")
+		if len(o.res.Problems) > 0 || len(recs) != 1 || recs[0]["Code"] != "a" {
+			t.Errorf("%s: records %v, problems %v", v, recs, o.res.Problems)
+		}
+	}
+	o := run(`{"mandatoryFields": []}`, false)
+	if len(o.res.Problems) == 0 || !strings.Contains(o.res.Problems[0].Message, "element 0 violates the schema") {
+		t.Errorf("without validation: %v", o.res.Problems)
+	}
+	o = run(`{"mandatoryFields": []}`, true)
+	if len(o.res.Problems) > 0 || !hasNote(o.res, CodeLint, "element 0 violates the schema") {
+		t.Errorf("IgnoreLinting: problems %v, notes %v", o.res.Problems, o.res.Notes)
+	}
+}
+
+func hasNote(res *Result, code, text string) bool {
+	for _, n := range res.Notes {
+		if n.Code == code && strings.Contains(n.Message, text) {
+			return true
+		}
+	}
+	return false
 }
 
 // "validation": equalFields pick elements with a value, followingDetails

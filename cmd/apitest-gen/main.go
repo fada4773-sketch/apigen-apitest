@@ -133,6 +133,7 @@ type options struct {
 	repair, overwrite         bool
 	dryRun, verbose, dictOnly bool
 	check                     bool
+	debug, ignoreLinting      bool
 	genericIDs                string
 }
 
@@ -159,10 +160,12 @@ func flags(name string, out io.Writer) (*flag.FlagSet, *options) {
 	fs.BoolVar(&o.dryRun, "dry-run", false, "show what would change, write nothing")
 	fs.BoolVar(&o.verbose, "v", false, "verbose: list every change and how often each default was used, not only problems")
 	fs.BoolVar(&o.check, "check", false, "apply: check the written spec afterwards and exit with 1 on problems")
+	fs.BoolVar(&o.debug, "debug", false, "apply: save the dictionary even if the run fails; the spec stays unchanged")
+	fs.BoolVar(&o.ignoreLinting, "ignorelinting", false, "apply: report records and examples that violate their schema instead of stopping")
 	return fs, o
 }
 
-func execute(o *options, out io.Writer) error {
+func execute(o *options, out io.Writer) (err error) {
 	s, err := spec.Load(context.Background(), o.spec)
 	if err != nil {
 		return err
@@ -172,6 +175,13 @@ func execute(o *options, out io.Writer) error {
 		return err
 	}
 	d, notes, st := dict.Build(s, old, dict.Options{Seed: o.seed, Repair: o.repair})
+	if o.debug {
+		defer func() {
+			if err != nil && saveDict(o, d, out) == nil && !o.dryRun {
+				fmt.Fprintf(out, "debug: %s saved despite the error; the spec is unchanged\n", o.dict)
+			}
+		}()
+	}
 
 	action := "updated"
 	if !exists {
@@ -204,8 +214,9 @@ func execute(o *options, out io.Writer) error {
 		return err
 	}
 	res := apply.Apply(doc, s, d, defs, apply.Options{
-		Seed:       o.seed,
-		Overwrite:  o.overwrite,
+		Seed: o.seed,
+		// a snapshot takes nothing from the examples of the spec
+		Overwrite:  o.overwrite || o.baseURL != "",
 		GenericIDs: strings.Split(o.genericIDs, ","),
 		RecordKey:  recordKey(model.Detect(s, defs.Model)),
 	})
@@ -249,6 +260,9 @@ func execute(o *options, out io.Writer) error {
 	}
 	defer os.Remove(tmp)
 	problems := append(apply.Verify(written, defs, res), scenario.Verify(written, defs, sres.Records)...)
+	if o.ignoreLinting {
+		problems = lintOnly(problems, out)
+	}
 	if len(problems) > 0 {
 		fmt.Fprintln(out, "verify: the defaults do not fit the written spec")
 		for _, p := range problems {
@@ -298,7 +312,7 @@ func records(o *options, doc *yamldoc.Doc, target string, d *dict.Dict, defs *de
 		return nil, err
 	}
 	os.Remove(tmp)
-	in := scenario.Input{Doc: doc, Spec: mid, Dict: d, Defaults: defs, Model: model.Detect(mid, defs.Model), Seed: o.seed}
+	in := scenario.Input{Doc: doc, Spec: mid, Dict: d, Defaults: defs, Model: model.Detect(mid, defs.Model), Seed: o.seed, IgnoreLinting: o.ignoreLinting}
 	if o.baseURL != "" {
 		opt, err := discoverOptions(o)
 		if err != nil {
@@ -325,6 +339,23 @@ func records(o *options, doc *yamldoc.Doc, target string, d *dict.Dict, defs *de
 		return nil, fmt.Errorf("records: %d problems; nothing was written", len(res.Problems))
 	}
 	return res, nil
+}
+
+// lintOnly prints the problems of the examples (schema violations, examples
+// that do not show their record) as notes and returns the others, which
+// still stop the run: those of the defaults and bindings.
+func lintOnly(problems []string, out io.Writer) []string {
+	var rest []string
+	for _, p := range problems {
+		code, _, _ := strings.Cut(p, " ")
+		switch code {
+		case "EXAMPLE_SCHEMA", scenario.CodeStale, scenario.CodeNoRecord:
+			fmt.Fprintf(out, "  %-21s %s\n", scenario.CodeLint, p)
+		default:
+			rest = append(rest, p)
+		}
+	}
+	return rest
 }
 
 // recordKey reports the path parameters that hold a record key.

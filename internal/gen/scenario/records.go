@@ -183,7 +183,7 @@ func (b *builder) fit(r *model.Resource, recs []Record, fetched bool) {
 					where := fmt.Sprintf("%s.parameters[%s]", o.Op.Where, mp.Name)
 					_, fromDefault := b.keys[strings.ToLower(r.Name)][mp.Field]
 					if fetched || (i == 0 && fromDefault) {
-						b.res.problem(CodeInvalid, where, "%s #%d has %s = %s, which violates the schema of {%s}; the spec or the data is wrong",
+						b.res.lint(b.in.IgnoreLinting, CodeInvalid, where, "%s #%d has %s = %s, which violates the schema of {%s}; the spec or the data is wrong",
 							r.Name, i+1, mp.Field, text(v), mp.Name)
 						continue
 					}

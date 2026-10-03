@@ -165,7 +165,9 @@ func (b *builder) paramValue(o *model.Op, p *openapi3.Parameter, rec Record, exa
 	if e := b.in.Defaults.Plain(p.Name); e != nil {
 		return e.Value
 	}
-	if examples {
+	// a snapshot never takes a value from the examples of the spec: they
+	// were written by hand or generated, not read from the instance
+	if examples && b.in.Fetch == nil {
 		return paramExample(b.in.Doc, o.Op, p)
 	}
 	return nil

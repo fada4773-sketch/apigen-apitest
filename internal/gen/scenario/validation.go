@@ -183,7 +183,11 @@ func (b *builder) details(ctx context.Context, r *model.Resource, c *checks, ite
 		}
 		if s := successSchema(d.op); s != nil && s.Value != nil {
 			if errs := b.validator().Validate(s.Value, spec.Normalize(body), spec.ModeResponse); len(errs) > 0 {
-				return nil, fmt.Sprintf("GET %s answered against its schema (%s: %s)", d.url, errs[0].Pointer, errs[0].Reason)
+				why := fmt.Sprintf("GET %s answered against its schema (%s: %s)", d.url, errs[0].Pointer, errs[0].Reason)
+				if !b.in.IgnoreLinting {
+					return nil, why
+				}
+				b.res.note(CodeLint, "$snapshot."+r.Name, "%s", why)
 			}
 		}
 		got[d.url] = spec.Normalize(body)

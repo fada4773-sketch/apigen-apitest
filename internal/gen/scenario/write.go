@@ -107,8 +107,9 @@ func (w *writer) param(op *spec.Operation, name string, v any) {
 	}
 	v = coerce(v, p.Schema.Value)
 	if errs := w.v.Validate(p.Schema.Value, v, spec.ModePlain); len(errs) > 0 {
-		w.res.problem(CodeInvalid, e.where, "the record value %s violates the schema of {%s}: %s", text(v), name, errs[0].Reason)
-		return
+		if !w.res.lint(w.in.IgnoreLinting, CodeInvalid, e.where, "the record value %s violates the schema of {%s}: %s", text(v), name, errs[0].Reason) {
+			return
+		}
 	}
 	if prev, ok := w.params[e.target]; ok && !equalJSON(prev.value, v) {
 		if !e.inline() {
@@ -262,8 +263,9 @@ func matching(r *model.Resource, recs []Record, item any) Record {
 // same example from every operation.
 func (w *writer) media1(pl *place, v any, mode spec.Mode, by string) {
 	if errs := w.v.Validate(pl.schema.Value, spec.Normalize(v), mode); len(errs) > 0 {
-		w.res.problem(CodeInvalid, pl.where, "the example from the records violates the schema (%s: %s)", errs[0].Pointer, errs[0].Reason)
-		return
+		if !w.res.lint(w.in.IgnoreLinting, CodeInvalid, pl.where, "the example from the records violates the schema (%s: %s)", errs[0].Pointer, errs[0].Reason) {
+			return
+		}
 	}
 	if pl.shared {
 		if prev, ok := w.media[pl.node]; ok && !equalJSON(prev.value, v) {

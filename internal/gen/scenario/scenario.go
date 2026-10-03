@@ -34,6 +34,7 @@ const (
 	CodeSnapshotDiff  = "SNAPSHOT_MISMATCH" // two responses disagree about a record
 	CodeSnapshotWins  = "SNAPSHOT_WINS"     // a default is not used for a fetched record
 	CodeSnapshotKey   = "SNAPSHOT_KEY"      // the record a key default selects does not exist
+	CodeLint          = "LINT_IGNORED"      // a schema violation that -ignorelinting lets through
 	CodeUpdate        = "UPDATE"            // an update changes a record
 	CodeCreatedKey    = "CREATED_KEY"       // the server assigns a key of a created record
 	CodeInlined       = "PARAM_INLINED"     // a shared parameter was copied into the path
@@ -77,7 +78,11 @@ type Input struct {
 	Model    *model.Model
 	Seed     uint64
 	// Fetch takes the records from a running instance; nil generates them.
+	// With Fetch, the examples of the spec are never used as values.
 	Fetch Fetcher
+	// IgnoreLinting reports data and examples that violate their schema
+	// (CodeLint) instead of stopping the run.
+	IgnoreLinting bool
 }
 
 // Result of Run. With Problems the document must not be saved.
@@ -97,6 +102,17 @@ type Stats struct {
 
 func (r *Result) note(code, where, format string, args ...any) {
 	r.Notes = append(r.Notes, Note{code, where, fmt.Sprintf(format, args...)})
+}
+
+// lint reports a schema violation: a problem, or with IgnoreLinting a note
+// (CodeLint). It reports whether the run goes on with the value.
+func (r *Result) lint(ignore bool, code, where, format string, args ...any) bool {
+	if ignore {
+		r.note(CodeLint, where, "%s: %s", code, fmt.Sprintf(format, args...))
+		return true
+	}
+	r.problem(code, where, format, args...)
+	return false
 }
 
 func (r *Result) problem(code, where, format string, args ...any) {

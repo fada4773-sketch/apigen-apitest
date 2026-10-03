@@ -364,3 +364,103 @@ func TestApplySnapshot(t *testing.T) {
 		t.Errorf("review: %d\n%s", code, out)
 	}
 }
+
+// With -base-url nothing comes from the examples of the spec: neither the
+// query of the snapshot nor the request bodies.
+func TestApplySnapshotIgnoresSpecExamples(t *testing.T) {
+	var queries []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.RawQuery)
+		w.Header().Set("Content-Type", "application/json")
+		dock := `{"Id": 7, "Code": "abc", "Name": "Moon Dock"}`
+		switch r.URL.Path {
+		case "/Dock":
+			_, _ = w.Write([]byte("[" + dock + "]"))
+		case "/Dock/id/7", "/Dock/abc":
+			_, _ = w.Write([]byte(dock))
+		case "/Dock/abc/Ship":
+			_, _ = w.Write([]byte(`[{"Id": 31, "Name": "Pilot Ship", "DockId": 7}]`))
+		case "/Ship/id/31":
+			_, _ = w.Write([]byte(`{"Id": 31, "Name": "Pilot Ship", "DockId": 7}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	dir, path := copySpec(t, "records.yaml")
+	src, _ := os.ReadFile(path)
+	spec := strings.Replace(string(src), "      operationId: GetDocks\n",
+		"      operationId: GetDocks\n      parameters:\n        - { name: zone, in: query, schema: { type: string }, example: SpecZone }\n", 1)
+	spec = strings.Replace(spec, `            schema: { $ref: "#/components/schemas/DockUpdate" }`+"\n",
+		`            schema: { $ref: "#/components/schemas/DockUpdate" }`+"\n            example: { Name: Spec Garden, Code: spec }\n", 1)
+	if err := os.WriteFile(path, []byte(spec), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := cli("-spec", path, "-dict", filepath.Join(dir, "dict.json"), "-defaults", filepath.Join(dir, "none.json"), "-base-url", srv.URL)
+	if code != 0 {
+		t.Fatalf("%d\n%s\n%s", code, out, errOut)
+	}
+	if strings.Contains(strings.Join(queries, "&"), "SpecZone") {
+		t.Errorf("the snapshot used the example of the spec: %q", queries)
+	}
+	if written, _ := os.ReadFile(path); strings.Contains(string(written), "Spec Garden") {
+		t.Errorf("the example of the spec was kept:\n%s", written)
+	}
+}
+
+// -ignorelinting lets data that violates its schema through as notes;
+// -debug saves the dictionary of a failed run.
+func TestApplyIgnoreLintingAndDebug(t *testing.T) {
+	up := true
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !up {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		dock := `{"Id": 7, "Code": "abc", "Name": "Moon Dock with a name longer than forty characters"}`
+		switch r.URL.Path {
+		case "/Dock":
+			_, _ = w.Write([]byte("[" + dock + "]"))
+		case "/Dock/id/7", "/Dock/abc":
+			_, _ = w.Write([]byte(dock))
+		case "/Dock/abc/Ship":
+			_, _ = w.Write([]byte(`[{"Id": 31, "Name": "Pilot Ship", "DockId": 7}]`))
+		case "/Ship/id/31":
+			_, _ = w.Write([]byte(`{"Id": 31, "Name": "Pilot Ship", "DockId": 7}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	dir, path := copySpec(t, "records.yaml")
+	none := filepath.Join(dir, "none.json")
+	dictPath := filepath.Join(dir, "dict.json")
+
+	code, out, _ := cli("-spec", path, "-dict", dictPath, "-defaults", none, "-base-url", srv.URL)
+	if code != 1 || !strings.Contains(out, "violates the schema") {
+		t.Fatalf("without -ignorelinting: %d\n%s", code, out)
+	}
+	code, out, errOut := cli("-spec", path, "-dict", dictPath, "-defaults", none, "-base-url", srv.URL, "-ignorelinting")
+	if code != 0 || !strings.Contains(out, "LINT_IGNORED") {
+		t.Fatalf("-ignorelinting: %d\n%s\n%s", code, out, errOut)
+	}
+	if written, _ := os.ReadFile(path); !strings.Contains(string(written), "longer than forty") {
+		t.Error("the fetched record was not written")
+	}
+
+	up = false
+	dir, path = copySpec(t, "records.yaml")
+	before, _ := os.ReadFile(path)
+	dictPath = filepath.Join(dir, "dict.json")
+	code, out, _ = cli("-spec", path, "-dict", dictPath, "-defaults", none, "-base-url", srv.URL, "-debug")
+	if code != 1 || !strings.Contains(out, "debug: "+dictPath+" saved despite the error") {
+		t.Fatalf("-debug: %d\n%s", code, out)
+	}
+	if _, err := os.Stat(dictPath); err != nil {
+		t.Errorf("-debug did not save the dictionary: %v", err)
+	}
+	if after, _ := os.ReadFile(path); string(after) != string(before) {
+		t.Error("-debug changed the spec")
+	}
+}
