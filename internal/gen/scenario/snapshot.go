@@ -11,15 +11,24 @@ import (
 	"github.com/fada4773-sketch/apigen-apitest/internal/compare"
 	"github.com/fada4773-sketch/apigen-apitest/internal/gen/model"
 	"github.com/fada4773-sketch/apigen-apitest/internal/gen/yamldoc"
-	"github.com/fada4773-sketch/apigen-apitest/internal/params"
 	"github.com/fada4773-sketch/apigen-apitest/internal/spec"
 )
 
 // source is where the records of a resource are fetched.
 type source struct {
 	op       *model.Op
+	url      string // the request written in "$snapshot", "" to build it from op
 	count    int
 	explicit bool // from "$snapshot"
+}
+
+// path is the request of the source; missing names a placeholder without
+// value.
+func (b *builder) path(r *model.Resource, src source) (string, string) {
+	if src.url != "" {
+		return b.fillURL(src.op, src.url, b.keyRecord(r))
+	}
+	return b.target(src.op, b.keyRecord(r))
 }
 
 // snapshot fetches the records from the running instance. Only GETs are
@@ -43,11 +52,11 @@ func (b *builder) snapshot(ctx context.Context) {
 			src, ok := sources[r]
 			if !ok {
 				b.generated(r)
-				b.res.note(CodeSnapshotEmpty, r.Name, "no GET lists %s without parameters of its own; its records are generated (set \"$snapshot\": {%q: {\"from\": \"<operationId>\"}})", r.Name, r.Name)
+				b.res.note(CodeSnapshotEmpty, r.Name, "no GET lists %s with known parameters; its records are generated (set \"$snapshot\": {%q: {\"from\": \"/path?query\"}}, apitest-gen review proposes it)", r.Name, r.Name)
 				progress = true
 				continue
 			}
-			path, missing := b.target(src.op, b.keyRecord(r))
+			path, missing := b.path(r, src)
 			if missing != "" {
 				rest = append(rest, r)
 				continue
@@ -59,11 +68,15 @@ func (b *builder) snapshot(ctx context.Context) {
 	}
 	for _, r := range pending {
 		src := sources[r]
-		_, missing := b.target(src.op, b.keyRecord(r))
+		_, missing := b.path(r, src)
 		if r.Parent != nil && b.store.Fetched(r.Parent.Name) && len(b.store.Records(r.Parent.Name)) == 0 {
 			b.store.set(r, nil)
 			b.store.fetched[strings.ToLower(r.Name)] = true
 			b.res.note(CodeSnapshotEmpty, r.Name, "the test starts without %s records, so there are no %s below them either", r.Parent.Name, r.Name)
+			continue
+		}
+		if src.url != "" {
+			b.res.problem(CodeSnapshotFail, "$snapshot."+r.Name, "%s in %q has no value; replace it in \"from\" with a value that exists in the instance", missing, src.url)
 			continue
 		}
 		b.res.problem(CodeSnapshotFail, r.Name, "%s needs %s, which no record provides", src.op.Op.ID, missing)
@@ -82,6 +95,9 @@ func (b *builder) snapshot(ctx context.Context) {
 // the list of r with the fewest parameters, all of them keys of a parent.
 func (b *builder) source(r *model.Resource) (source, bool) {
 	if s, ok := b.in.Defaults.SnapshotFor(r.Name); ok {
+		if IsURL(s.From) {
+			return b.urlSource(r, s.From, s.Records())
+		}
 		o := b.in.Model.OpByID(s.From)
 		switch {
 		case o == nil:
@@ -93,65 +109,56 @@ func (b *builder) source(r *model.Resource) (source, bool) {
 		}
 		return source{}, false
 	}
+	if best := AutoSource(r); best != nil {
+		return source{op: best, count: 1}, true
+	}
+	return source{}, false
+}
+
+// AutoSource is the list the records of r are fetched from without
+// "$snapshot": the one with the fewest path parameters, all of them keys of
+// a parent. A list with a path parameter of unknown meaning ({level}) needs
+// a value only the user knows, so it is no automatic source.
+func AutoSource(r *model.Resource) *model.Op {
 	var best *model.Op
 	for _, o := range r.OpsWith(model.RoleList) {
-		own := false
-		for _, p := range o.Params {
-			own = own || p.Resource == r
+		ok := true
+		for _, p := range o.Op.Params {
+			mp := o.Param(p.Name)
+			if p.In == openapi3.ParameterInPath && (mp == nil || mp.Resource == r) {
+				ok = false
+			}
 		}
-		if !own && (best == nil || len(o.Params) < len(best.Params)) {
+		if ok && (best == nil || len(o.Params) < len(best.Params)) {
 			best = o
 		}
 	}
-	if best == nil {
-		return source{}, false
+	return best
+}
+
+// urlSource finds the GET of r a request in "$snapshot" addresses.
+func (b *builder) urlSource(r *model.Resource, raw string, count int) (source, bool) {
+	path, _, _ := strings.Cut(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), "GET ")), "?")
+	for _, role := range []model.Role{model.RoleList, model.RoleRead} {
+		for _, o := range r.OpsWith(role) {
+			if MatchPath(o.Op.Path, path) {
+				return source{op: o, url: raw, count: count, explicit: true}, true
+			}
+		}
 	}
-	return source{op: best, count: 1}, true
+	b.res.problem(CodeSnapshotFail, "$snapshot."+r.Name, "%q is no GET of %s in the spec", raw, r.Name)
+	return source{}, false
 }
 
 // target builds the request path of o. Parameters of other resources take
 // the key of their first record, own parameters the key of rec. missing
 // names a parameter without value.
 func (b *builder) target(o *model.Op, rec Record) (string, string) {
-	path := o.Op.Path
-	var query []params.Pair
-	for _, p := range o.Op.Params {
-		var v any
-		mp := o.Param(p.Name)
-		switch {
-		case mp != nil && mp.Resource == o.Resource && rec != nil:
-			v = rec[mp.Field]
-		case mp != nil && mp.Resource != o.Resource:
-			if recs := b.store.Records(mp.Resource.Name); len(recs) > 0 {
-				v = recs[0][mp.Field]
-			}
-		case mp == nil:
-			v = paramExample(b.in.Doc, o.Op, p)
-		}
-		if v == nil {
-			if p.In == openapi3.ParameterInPath || p.Required {
-				return "", fmt.Sprintf("{%s}", p.Name)
-			}
-			continue
-		}
-		switch p.In {
-		case openapi3.ParameterInPath:
-			s, err := params.Path(p, v)
-			if err != nil {
-				return "", fmt.Sprintf("{%s}", p.Name)
-			}
-			path = strings.ReplaceAll(path, "{"+p.Name+"}", s)
-		case openapi3.ParameterInQuery:
-			pairs, err := params.Query(p, v)
-			if err == nil {
-				query = append(query, pairs...)
-			}
-		}
+	target, missing := Fill(o, func(p *openapi3.Parameter) any { return b.paramValue(o, p, rec, true) })
+	if len(missing) > 0 {
+		return "", "{" + missing[0] + "}"
 	}
-	if len(query) > 0 {
-		path += "?" + params.EncodeQuery(query)
-	}
-	return path, ""
+	return target, ""
 }
 
 // paramExample is the example of a parameter that is no record key.

@@ -19,8 +19,12 @@ const (
 // Snapshot tells where the records of a resource come from: the operation
 // whose response provides them and how many elements of a list are taken.
 type Snapshot struct {
-	From  string `json:"from"`  // operationId of a GET of the resource
+	// From is the request, "/DefaultBook/Level/A1?isbn=978", or the
+	// operationId of a GET of the resource.
+	From  string `json:"from"`
 	Count int    `json:"count"` // records taken from the list; 0 means 1
+	// Comment is free text; review writes the path template there.
+	Comment string `json:"$comment,omitempty"`
 }
 
 // Records is the number of records, at least 1.

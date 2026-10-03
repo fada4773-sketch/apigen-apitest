@@ -23,6 +23,7 @@ import (
 	"github.com/fada4773-sketch/apigen-apitest/internal/gen/defaults"
 	"github.com/fada4773-sketch/apigen-apitest/internal/gen/dict"
 	"github.com/fada4773-sketch/apigen-apitest/internal/gen/model"
+	"github.com/fada4773-sketch/apigen-apitest/internal/gen/scenario"
 	"github.com/fada4773-sketch/apigen-apitest/internal/params"
 	"github.com/fada4773-sketch/apigen-apitest/internal/spec"
 )
@@ -131,36 +132,132 @@ func (r *reviewer) modeled(op *spec.Operation, name string) bool {
 	return o != nil && o.Param(name) != nil
 }
 
-// snapshot proposes "$snapshot" with the list each resource is fetched
-// from, if the defaults have none yet.
+// snapshot proposes "$snapshot" with the request each resource is fetched
+// from, if the defaults have none yet. Parameters with a known value (a key
+// of a record of the last run, a default, a record field of the same name)
+// are filled in, the others stay placeholders; "$comment" shows the path
+// template, so the filled values can be checked.
 func (r *reviewer) snapshot() {
 	if r.in.Model == nil || len(r.in.Defaults.Snapshot) > 0 {
 		return
 	}
 	v := map[string]any{}
-	var names []string
+	var names, open []string
 	for _, res := range r.in.Model.Resources {
-		var best *model.Op
-		for _, o := range res.OpsWith(model.RoleList) {
-			own := false
-			for _, p := range o.Params {
-				own = own || p.Resource == res
-			}
-			if !own && o.Op.HasOperationID && (best == nil || len(o.Params) < len(best.Params)) {
-				best = o
+		o := scenario.AutoSource(res)
+		if o == nil {
+			o = r.anyList(res)
+		}
+		if o == nil {
+			continue
+		}
+		from := map[string]string{}
+		target, unknown := scenario.Fill(o, r.value(o, from))
+		comment := scenario.Template(o)
+		if o.Op.HasOperationID {
+			comment = o.Op.ID + ": " + comment
+		}
+		var filled []string
+		for _, p := range o.Op.Params {
+			if why, ok := from[p.Name]; ok {
+				filled = append(filled, p.Name+" = "+why)
 			}
 		}
-		if best != nil {
-			v[res.Name] = map[string]any{"from": best.Op.ID, "count": 1}
-			names = append(names, res.Name)
+		if len(filled) > 0 {
+			comment += "; filled: " + strings.Join(filled, ", ")
 		}
+		var missing []string
+		for _, name := range unknown {
+			if mp := o.Param(name); mp != nil {
+				// a key of the parent: the snapshot takes it from its record
+				comment += fmt.Sprintf("; {%s} is the %s of the first %s", name, mp.Field, mp.Resource.Name)
+				continue
+			}
+			missing = append(missing, name)
+		}
+		if len(missing) > 0 {
+			comment += "; replace {" + strings.Join(missing, "}, {") + "} with values that exist in the instance"
+			open = append(open, res.Name)
+		}
+		v[res.Name] = map[string]any{"from": target, "count": 1, "$comment": comment}
+		names = append(names, res.Name)
 	}
 	if len(v) == 0 {
 		return
 	}
+	fix := "with apitest-gen -base-url <instance> the examples get the data of the running instance; raise \"count\" to show more elements in the list examples"
+	if len(open) > 0 {
+		fix = "set the placeholders in \"from\" of " + strings.Join(open, ", ") + "; " + fix
+	}
 	r.add(Suggestion{Action: ActionDefault, Finding: "SNAPSHOT_SOURCE", Where: "model", Key: defaults.SnapshotKey, Value: v,
-		Message: fmt.Sprintf("the records of %s are fetched from these lists with -base-url", strings.Join(names, ", ")),
-		Fix:     "with apitest-gen -base-url <instance> the examples get the data of the running instance; raise \"count\" to show more elements in the list examples"})
+		Message: fmt.Sprintf("the records of %s are fetched with these requests with -base-url", strings.Join(names, ", ")),
+		Fix:     fix})
+}
+
+// anyList is the list of res with the fewest parameters and no key of res
+// itself in its path, for a source whose parameters the user fills in.
+func (r *reviewer) anyList(res *model.Resource) *model.Op {
+	var best *model.Op
+	for _, o := range res.OpsWith(model.RoleList) {
+		own := false
+		for _, p := range o.Params {
+			own = own || p.Resource == res
+		}
+		if !own && (best == nil || len(o.Op.Params) < len(best.Op.Params)) {
+			best = o
+		}
+	}
+	return best
+}
+
+// value returns what review knows about the parameters of o: the key of the
+// first record of the last run, a default, or a record field with the
+// parameter's name (bookCode → Book.Code).
+// Where a value comes from is noted in from, for the comment.
+func (r *reviewer) value(o *model.Op, from map[string]string) func(*openapi3.Parameter) any {
+	return func(p *openapi3.Parameter) any {
+		if mp := o.Param(p.Name); mp != nil && p.In == openapi3.ParameterInPath {
+			v := r.record(mp.Resource)[mp.Field]
+			if v != nil {
+				from[p.Name] = fmt.Sprintf("%s of the first %s", mp.Field, mp.Resource.Name)
+			}
+			return v
+		}
+		if o.Op.HasOperationID {
+			if e := r.in.Defaults.Scoped(o.Op.ID, p.Name); e != nil {
+				from[p.Name] = fmt.Sprintf("default %q", e.Key)
+				return e.Value
+			}
+		}
+		if e := r.in.Defaults.Plain(p.Name); e != nil {
+			from[p.Name] = fmt.Sprintf("default %q", e.Key)
+			return e.Value
+		}
+		for _, res := range r.in.Model.Resources {
+			rec := r.record(res)
+			for _, f := range res.FieldNames() {
+				if v, ok := rec[f]; ok && v != nil && (strings.EqualFold(f, p.Name) || strings.EqualFold(res.Name+f, p.Name)) {
+					from[p.Name] = fmt.Sprintf("%s of the first %s", f, res.Name)
+					return v
+				}
+			}
+		}
+		return nil
+	}
+}
+
+// record is the first record of res from the dictionary, nil before the
+// first run.
+func (r *reviewer) record(res *model.Resource) map[string]any {
+	if r.in.Dict == nil {
+		return nil
+	}
+	for name, recs := range r.in.Dict.Records {
+		if strings.EqualFold(name, res.Name) && len(recs) > 0 {
+			return recs[0]
+		}
+	}
+	return nil
 }
 
 // add records a suggestion once. Keys the defaults already have, or that

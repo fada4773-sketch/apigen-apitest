@@ -164,7 +164,7 @@ func TestReviewModel(t *testing.T) {
 		b, _ := json.Marshal(p.Value)
 		got[p.Key] = string(b)
 	}
-	want := map[string]string{defaults.SnapshotKey: `{"Moon":{"count":1,"from":"listMoonsOfPlanet"},"Planet":{"count":1,"from":"listPlanets"}}`}
+	want := map[string]string{defaults.SnapshotKey: `{"Moon":{"$comment":"listMoonsOfPlanet: /Planet/id/{id}/Moon; {id} is the Id of the first Planet","count":1,"from":"/Planet/id/{id}/Moon"},"Planet":{"$comment":"listPlanets: /Planet","count":1,"from":"/Planet"}}`}
 	if len(got) != len(want) || got[defaults.SnapshotKey] != want[defaults.SnapshotKey] {
 		t.Errorf("got %v", got)
 	}
@@ -174,5 +174,38 @@ func TestReviewModel(t *testing.T) {
 	r = Run(Input{Spec: s, Dict: d, DictNotes: notes, Defaults: defs, GenericIDs: ids, Apply: res, Model: model.Detect(s, nil)})
 	if n := len(r.Changes()); n != 0 {
 		t.Errorf("%d changes", n)
+	}
+}
+
+// A list below a path parameter of unknown meaning ({level}): review writes
+// the request with what it knows (dockCode from the Dock of the last run),
+// keeps {level} and shows the template in "$comment".
+func TestReviewSnapshotURL(t *testing.T) {
+	const path = "../../../testdata/gen/levels.yaml"
+	s, err := spec.Load(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := dict.New()
+	old.Records = map[string][]map[string]any{"Dock": {{"Code": "abc", "Name": "Moon Dock"}}}
+	d, notes, _ := dict.Build(s, old, dict.Options{Seed: 1})
+	defs := defaults.Empty()
+	doc, err := yamldoc.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := apply.Apply(doc, s, d, defs, apply.Options{Seed: 1})
+	r := Run(Input{Spec: s, Dict: d, DictNotes: notes, Defaults: defs, Apply: res, Model: model.Detect(s, nil)})
+	sg := find(r, ActionDefault, defaults.SnapshotKey)
+	if sg == nil {
+		t.Fatalf("no $snapshot proposed: %+v", r.Suggestions)
+	}
+	got, _ := json.Marshal(sg.Value)
+	want := `{"Dock":{"$comment":"GetDefaultDocks: /DefaultDock/Level/{level}?dockCode={dockCode}&twoDigitCode={twoDigitCode}&pilotNumber={pilotNumber}; filled: dockCode = Code of the first Dock; replace {level} with values that exist in the instance","count":1,"from":"/DefaultDock/Level/{level}?dockCode=abc"}}`
+	if g := strings.ReplaceAll(string(got), `\u0026`, "&"); g != want {
+		t.Errorf("got  %s\nwant %s", g, want)
+	}
+	if !strings.Contains(sg.Fix, "set the placeholders") {
+		t.Errorf("fix: %s", sg.Fix)
 	}
 }

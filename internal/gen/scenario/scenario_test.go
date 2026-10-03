@@ -442,3 +442,72 @@ func TestRunKeyDefaults(t *testing.T) {
 		t.Errorf("problems: %v", conflict.res.Problems)
 	}
 }
+
+// "from" in "$snapshot" can be the request itself. Placeholders left in it
+// are filled where a value is known; an unknown optional query parameter
+// is dropped, an unknown path parameter stops the run.
+func TestRunSnapshotURL(t *testing.T) {
+	var asked []string
+	fetch := func(_ context.Context, path string) (any, error) {
+		asked = append(asked, path)
+		dock := map[string]any{"Code": "abc", "Name": "Moon Dock"}
+		switch strings.Split(path, "?")[0] {
+		case "/DefaultDock/Level/A1":
+			return []any{dock}, nil
+		case "/Dock/abc":
+			return dock, nil
+		}
+		return nil, errors.New("status 404")
+	}
+	p := newPipelineFile(t, "levels.yaml", `{"$snapshot": {"Dock": {"from": "/DefaultDock/Level/A1?dockCode={dockCode}&pilotNumber=7", "$comment": "set by hand"}}}`)
+	p.fetch = fetch
+	o := p.run()
+	if len(o.res.Problems) > 0 || len(o.problems) > 0 {
+		t.Fatalf("problems: %v %v", o.res.Problems, o.problems)
+	}
+	if len(asked) == 0 || asked[0] != "/DefaultDock/Level/A1?pilotNumber=7" {
+		t.Errorf("requests: %v", asked)
+	}
+	if got := field(example(t, o.written, "GetDock", "200"), "Name"); got != "Moon Dock" {
+		t.Errorf("GetDock: %v", got)
+	}
+
+	for from, want := range map[string]string{
+		"/DefaultDock/Level/{level}": `{level} in "/DefaultDock/Level/{level}" has no value`,
+		"GET /Nope/A1":               "is no GET of Dock",
+	} {
+		p := newPipelineFile(t, "levels.yaml", `{"$snapshot": {"Dock": {"from": "`+from+`"}}}`)
+		p.fetch = fetch
+		o := p.run()
+		if len(o.res.Problems) == 0 || !strings.Contains(o.res.Problems[0].Message, want) {
+			t.Errorf("%s: problems %v", from, o.res.Problems)
+		}
+	}
+}
+
+// Without "$snapshot" a list below an unknown path parameter is no source:
+// its value only the user knows.
+func TestRunSnapshotUnknownParam(t *testing.T) {
+	p := newPipelineFile(t, "levels.yaml", `{}`)
+	p.fetch = func(context.Context, string) (any, error) { return nil, errors.New("not asked") }
+	o := p.run()
+	if len(o.res.Problems) > 0 || !strings.Contains(notes(o.res), `"from": "/path?query"`) {
+		t.Errorf("problems %v\n%s", o.res.Problems, notes(o.res))
+	}
+}
+
+func TestMatchPath(t *testing.T) {
+	for _, c := range []struct {
+		template, path string
+		want           bool
+	}{
+		{"/DefaultBook/Level/{level}", "/DefaultBook/Level/A1", true},
+		{"/DefaultBook/Level/{level}", "/defaultbook/level/{level}", true},
+		{"/Book/{Code}", "/Book/abc/Article", false},
+		{"/Book/id/{id}", "/Book/x/7", false},
+	} {
+		if got := MatchPath(c.template, c.path); got != c.want {
+			t.Errorf("MatchPath(%q, %q) = %v", c.template, c.path, got)
+		}
+	}
+}
