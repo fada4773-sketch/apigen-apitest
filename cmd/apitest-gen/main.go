@@ -328,16 +328,21 @@ func records(o *options, doc *yamldoc.Doc, target string, d *dict.Dict, defs *de
 		res.Stats.Resources, res.Stats.Records, source, res.Stats.Updates, res.Stats.Examples, res.Stats.Inlined)
 	for _, n := range res.Notes {
 		if o.verbose || !quietRecord[n.Code] {
-			fmt.Fprintf(out, "  %-21s %s: %s\n", n.Code, n.Where, n.Message)
+			fmt.Fprintf(out, "  %-21s %s: %s\n", n.Code, n.Where, indent(n.Message))
 		}
 	}
 	if len(res.Problems) > 0 {
 		for _, p := range res.Problems {
-			fmt.Fprintf(out, "  FATAL %s %s: %s\n", p.Code, p.Where, p.Message)
+			fmt.Fprintf(out, "\n  FATAL %s %s: %s\n", p.Code, p.Where, indent(p.Message))
 		}
 		return nil, fmt.Errorf("records: %d problems; nothing was written", len(res.Problems))
 	}
 	return res, nil
+}
+
+// indent puts the further lines of a message under its first one.
+func indent(msg string) string {
+	return strings.ReplaceAll(msg, "\n", "\n      ")
 }
 
 // lintOnly prints the problems of the examples (schema violations, examples

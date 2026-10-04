@@ -60,16 +60,29 @@ type builder struct {
 	v     *spec.Validator
 	// keys are the key values the defaults set: resource → field → value
 	keys map[string]map[string]keyDefault
-	// detailOf is the request of "followingDetails" the records of a
+	// detailOf is the operation of "followingDetails" the records of a
 	// resource come from, for resources without a source of their own
-	detailOf map[string]detailSource
+	detailOf map[string]*model.Op
+	// origins are the requests the records of a resource were fetched
+	// with, by record, for the messages
+	origins map[string][]string
 	// seeds are the "seed" values of the entries fetched so far, in order
 	seeds []seedSets
 }
 
-type detailSource struct {
-	op   *model.Op
-	desc string
+func (b *builder) setOrigins(r *model.Resource, origins []string) {
+	if b.origins == nil {
+		b.origins = map[string][]string{}
+	}
+	b.origins[strings.ToLower(r.Name)] = origins
+}
+
+// origin is the request record i of r was fetched with.
+func (b *builder) origin(r *model.Resource, i int) string {
+	if o := b.origins[strings.ToLower(r.Name)]; i < len(o) {
+		return o[i]
+	}
+	return "the snapshot"
 }
 
 type keyDefault struct {

@@ -16,6 +16,12 @@ contain breaking changes, which are listed here.
 
 ### Features
 
+- `mandatoryFields` also rejects an empty object `{}`.
+- `SNAPSHOT_MISMATCH` is one message per record and read: both requests as
+  sent, the keys of the record, every differing field with both values and
+  the `IgnoreFields` entry that fixes it. `SNAPSHOT_SHORT` lists requests,
+  counts, checks and reasons on lines of their own; multi-line messages are
+  indented.
 - `"$snapshot"` runs in the order of `defaults.json`; `review` writes the
   entries in the order of the paths in the spec, with an empty `"seed"`.
 - `"seed"` in a `"$snapshot"` entry keeps fields of the chosen elements,

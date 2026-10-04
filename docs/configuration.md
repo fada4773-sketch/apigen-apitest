@@ -969,7 +969,18 @@ If something is detected wrongly, correct it in `defaults.json`:
 
 1. For every resource, the request it is fetched with: `"from"` in `"$snapshot"`, or the list of the resource with the fewest path parameters, all of them keys of another resource. A list below another resource (`/Book/{Code}/Article`) uses the key of the first record of that resource, so parents are fetched first. A list with a path parameter of unknown meaning (`/DefaultBook/Level/{level}`) is never chosen by itself: only you know a level that exists, so set it in `"from"`.
 2. The first `count` elements become the records (`#1`, `#2`, …). `#1` is the record the path parameters show.
-3. Every record is read again with each read of the resource (`GET /Book/id/7`, `GET /Book/abc`). Fields only the read returns are added. A field that differs between two responses stops the run (`SNAPSHOT_MISMATCH`).
+3. Every record is read again with each read of the resource (`GET /Book/id/7`, `GET /Book/abc`). Fields only the read returns are added. A field that differs between two responses stops the run (`SNAPSHOT_MISMATCH`), one message per record and read, with both requests as they were sent and every field that differs:
+
+   ```text
+   FATAL SNAPSHOT_MISMATCH Book #1: two requests for the same Book (Code="abc") disagree about 2 fields, the examples cannot show both:
+         A  GET /DefaultBook/Level/A1?bookCode=abc (GetBooks)
+         B  GET /Book/abc (GetBook)
+         Status  A "Draft"  B "Published"
+         Name    A "Garden" B "Moon Garden"
+         if the endpoints show these fields differently on purpose, add them to "$apitest": {"IgnoreFields": ["Status", "Name"]} and to Config.IgnoreFields of the test; otherwise check that both requests address the same Book
+   ```
+
+   A field a read added before is labelled with that read (`A1`, `A2`).
 4. The other lists of the resource are fetched too. Their examples show the elements the instance returns.
 
 ```json
@@ -1020,14 +1031,19 @@ If something is detected wrongly, correct it in `defaults.json`:
 
 | Check | An element passes if |
 |---|---|
-| `mandatoryFields` | every field has a value: not missing, not null, not `""`, not an empty list |
+| `mandatoryFields` | every field has a value: not missing, not null, not `""`, not an empty list `[]`, not an empty object `{}` |
 | `equalFields` | every field has exactly this value (JSON value; a number also equals its text, `"7"` and `7`) |
 | `followingDetails` | every request answers for this element with a 2xx, a body that is not empty and fits the schema of that GET in the spec. The placeholders take the values of the element: `{id}` the field the model maps the parameter to (`/book/{id}` → `Book.Id`), else the field of the same name (`{code}` → `Code`). |
 
 The field checks need no request, so only elements that pass them are asked for their details. With `GetBooks` returning 100 books and `count: 5`, apitest-gen asks the details book by book until 5 books pass. Too few stop the run with the numbers and the reasons:
 
 ```text
-FATAL SNAPSHOT_SHORT Book: GET /DefaultBook/Level/A1 (GetBooks) returned 100 elements, 7 pass the fields of the validation, 3 pass all of it (…); "$snapshot" asks for 5; rejected 4: GET /book/{code}/price failed (status 404)
+FATAL SNAPSHOT_SHORT Book: "$snapshot" asks for 5 records, 3 pass:
+      request   GET /DefaultBook/Level/A1 (GetBooks)
+      elements  100 returned, 7 pass the fields, 3 pass all of it
+      checks    mandatoryFields [Book.Author]; followingDetails /book/{code}/price
+      rejected  4: GET /book/{code}/price failed (status 404)
+      add data to the instance, lower "count" or check the validation
 ```
 
 **Field paths** have dots. Each segment is a field name (case does not matter), the name of a DTO, or the name of a resource (`Book` for `BookRead`). For a DTO name, the path continues at the object of that DTO: the element itself (`BookRead`, also through `allOf`), or the first object of that type below it. So in a list of `BookRead`, `Book.Author`, `BookRead.Author` and `Author` mean the same field, and `BookRead.BookDetail.Author`, `BookDetail.Author` reach into a `BookDetail`. In a list one element is enough (`Ships.Callsign`). A field path that matches no field of the response schema, a request in `followingDetails` that fits no GET of the spec, and a placeholder the element has no field for stop the run before the list is searched.
@@ -1368,7 +1384,7 @@ Problems are always listed; messages marked *info* only with `-v`.
 | `MODEL` *info* | records | something the model could not decide, e.g. a parameter without resource | `$model` |
 | `FATAL SNAPSHOT_FAILED` | records | a request failed, a source does not fit, or a fetched element violates the schema | start the instance, fix `$snapshot`, the spec or the data |
 | `FATAL SNAPSHOT_SHORT` | records | fewer elements than `count` | add data or lower `count` |
-| `FATAL SNAPSHOT_MISMATCH` | records | two responses disagree about one record | the instance is inconsistent; add the field to `IgnoreFields` if it changes on purpose |
+| `FATAL SNAPSHOT_MISMATCH` | records | two responses disagree about one record; the message lists both requests and every field with both values | if the endpoints show the field differently on purpose, add it to `IgnoreFields` (`"$apitest"` and the test); otherwise check that both requests address the same record |
 | `FATAL SNAPSHOT_KEY` | records | the record a key default selects does not exist | correct the default or add the record |
 | `FATAL DEFAULT_CONFLICT` | records | two defaults set one key of a record differently | keep one |
 | `FATAL EXAMPLE_SHARED` | records | a shared parameter or response would need two examples | declare the parameter in each operation, or give the response its own object |

@@ -221,6 +221,7 @@ func paramExample(doc *yamldoc.Doc, op *spec.Operation, p *openapi3.Parameter) a
 // per seed set) are searched together, each element once.
 func (b *builder) fetchSource(ctx context.Context, r *model.Resource, src source, paths []string) {
 	var items []any
+	var froms []string // the request of each element
 	for _, p := range paths {
 		body, err := b.in.Fetch(ctx, p)
 		b.res.Stats.Fetched++
@@ -240,11 +241,13 @@ func (b *builder) fetchSource(ctx context.Context, r *model.Resource, src source
 		for _, item := range got {
 			if !slices.ContainsFunc(items, func(seen any) bool { return compare.Equal(seen, item) }) {
 				items = append(items, item)
+				froms = append(froms, fmt.Sprintf("GET %s (%s)", p, src.op.Op.ID))
 			}
 		}
 	}
 	path := strings.Join(paths, ", ")
 	all := len(items)
+	fetched := items
 	c, ok := b.compile(r, src)
 	if !ok {
 		return
@@ -274,17 +277,8 @@ func (b *builder) fetchSource(ctx context.Context, r *model.Resource, src source
 		return
 	}
 	if len(chosen) < src.count {
-		if c.active() {
-			msg := fmt.Sprintf("GET %s (%s) returned %d elements, %d pass the fields of the validation, %d pass all of it (%s); \"$snapshot\" asks for %d",
-				path, src.op.Op.ID, all, len(passed), len(chosen), c.describe(), src.count)
-			if reasons != "" {
-				msg += "; rejected " + reasons
-			}
-			b.res.problem(CodeSnapshotShort, r.Name, "%s; add data to the instance, lower \"count\" or check the validation", msg)
-			return
-		}
-		if src.explicit || len(chosen) > 0 {
-			b.res.problem(CodeSnapshotShort, r.Name, "GET %s (%s) returned %d elements, \"$snapshot\" asks for %d; add data to the instance or lower \"count\"", path, src.op.Op.ID, len(items), src.count)
+		if c.active() || src.explicit || len(chosen) > 0 {
+			b.res.problem(CodeSnapshotShort, r.Name, "%s", short(src, paths, c, all, len(passed), len(chosen), reasons))
 			return
 		}
 		// the database starts without this resource: only what the test
@@ -295,6 +289,15 @@ func (b *builder) fetchSource(ctx context.Context, r *model.Resource, src source
 		return
 	}
 	b.keepSeeds(r, c, chosen[:src.count])
+	origins := make([]string, src.count)
+	for i, item := range chosen[:src.count] {
+		// an element the defaults select may come from a read with its key
+		origins[i] = fmt.Sprintf("GET %s (%s)", path, src.op.Op.ID)
+		if j := slices.IndexFunc(fetched, func(f any) bool { return compare.Equal(f, item) }); j >= 0 {
+			origins[i] = froms[j]
+		}
+	}
+	b.setOrigins(r, origins)
 	b.keepDetails(r, c, chosen, answers)
 	items = chosen
 	var recs []Record
@@ -364,15 +367,18 @@ func (b *builder) complete(ctx context.Context, r *model.Resource, src source) {
 	recs := b.store.Records(r.Name)
 	ignore := b.in.Defaults.RunConfig().IgnoreFields
 	// where the records come from: the source, or for records from the
-	// followingDetails of another resource that request (src is empty then);
-	// it is not read again
-	origin, from := src.op, ""
-	if origin != nil {
-		from = origin.Op.ID
-	} else if d, ok := b.detailOf[strings.ToLower(r.Name)]; ok {
-		origin, from = d.op, d.desc
+	// followingDetails of another resource that operation (src is empty
+	// then); it is not read again
+	origin := src.op
+	if origin == nil {
+		origin = b.detailOf[strings.ToLower(r.Name)]
 	}
 	for i, rec := range recs {
+		// the request each field of the record comes from
+		fieldFrom := map[string]string{}
+		for f := range rec {
+			fieldFrom[f] = b.origin(r, i)
+		}
 		for _, o := range r.OpsWith(model.RoleRead) {
 			if o == origin || (i > 0 && !ownKey(o)) {
 				continue // a read without own key only addresses the first record
@@ -391,15 +397,20 @@ func (b *builder) complete(ctx context.Context, r *model.Resource, src source) {
 				continue
 			}
 			got := toRecord(r, body)
+			read := fmt.Sprintf("GET %s (%s)", path, o.Op.ID)
+			var diffs []fieldDiff
 			for _, f := range sortedKeys(got) {
 				old, has := rec[f]
 				switch {
 				case !has:
 					rec[f] = got[f]
+					fieldFrom[f] = read
 				case !compare.Equal(old, got[f]) && !containsFold(ignore, f):
-					b.res.problem(CodeSnapshotDiff, r.Name+"."+f, "%s #%d: %s returns %s, GET %s (%s) returns %s; the examples cannot show both",
-						r.Name, i+1, from, text(old), path, o.Op.ID, text(got[f]))
+					diffs = append(diffs, fieldDiff{f, fieldFrom[f], old, got[f]})
 				}
+			}
+			if len(diffs) > 0 {
+				b.res.problem(CodeSnapshotDiff, fmt.Sprintf("%s #%d", r.Name, i+1), "%s", mismatch(r, rec, read, diffs))
 			}
 		}
 	}
@@ -429,6 +440,106 @@ func (b *builder) complete(ctx context.Context, r *model.Resource, src source) {
 			b.store.lists[o.Op.ID] = kept
 		}
 	}
+}
+
+// short describes a source with fewer elements than "count":
+//
+//	"$snapshot" asks for 5 records, 3 pass:
+//	  request   GET /DefaultBook/Level/A1 (GetBooks)
+//	  elements  100 returned, 7 pass the fields, 3 pass all of it
+//	  checks    mandatoryFields [Book.Author]; followingDetails /book/{code}/price
+//	  rejected  4: GET /book/{code}/price failed (status 404)
+//	add data to the instance, lower "count" or check the validation
+func short(src source, paths []string, c *checks, all, fields, chosen int, reasons string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "\"$snapshot\" asks for %d record", src.count)
+	if src.count > 1 {
+		b.WriteString("s")
+	}
+	fmt.Fprintf(&b, ", %d pass:", chosen)
+	for i, p := range paths {
+		label := ""
+		if i == 0 {
+			label = "request"
+			if len(paths) > 1 {
+				label = "requests"
+			}
+		}
+		fmt.Fprintf(&b, "\n  %-9s GET %s (%s)", label, p, src.op.Op.ID)
+	}
+	if !c.active() {
+		fmt.Fprintf(&b, "\n  %-9s %d returned", "elements", all)
+		b.WriteString("\nadd data to the instance or lower \"count\"")
+		return b.String()
+	}
+	fmt.Fprintf(&b, "\n  %-9s %d returned, %d pass the fields, %d pass all of it", "elements", all, fields, chosen)
+	fmt.Fprintf(&b, "\n  %-9s %s", "checks", c.describe())
+	for i, why := range strings.Split(reasons, "; ") {
+		if why == "" {
+			continue
+		}
+		label := ""
+		if i == 0 {
+			label = "rejected"
+		}
+		fmt.Fprintf(&b, "\n  %-9s %s", label, why)
+	}
+	b.WriteString("\nadd data to the instance, lower \"count\" or check the validation")
+	return b.String()
+}
+
+// fieldDiff is a field two responses disagree about.
+type fieldDiff struct {
+	field, from string // from: the request of the value the record has
+	had, got    any
+}
+
+// mismatch describes the fields a read returns differently, grouped by the
+// request the record's value came from:
+//
+//	two requests for Book (Code="abc") disagree about 2 fields:
+//	  A  GET /DefaultBook/Level/A1?bookCode=abc (GetBooks)
+//	  B  GET /Book/abc (GetBook)
+//	  Status  A "Draft"  B "Published"
+//	  …
+func mismatch(r *model.Resource, rec Record, read string, diffs []fieldDiff) string {
+	var keys []string
+	for _, k := range r.Keys {
+		keys = append(keys, fmt.Sprintf("%s=%s", k, text(rec[k])))
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "two requests for the same %s (%s) disagree about %d field", r.Name, strings.Join(keys, " "), len(diffs))
+	if len(diffs) > 1 {
+		b.WriteString("s")
+	}
+	b.WriteString(", the examples cannot show both:")
+	var froms []string
+	width, valWidth := 0, 0
+	for _, d := range diffs {
+		if !slices.Contains(froms, d.from) {
+			froms = append(froms, d.from)
+		}
+		width = max(width, len(d.field))
+		valWidth = max(valWidth, len(text(d.had)))
+	}
+	label := func(from string) string {
+		if len(froms) == 1 {
+			return "A"
+		}
+		return fmt.Sprintf("A%d", slices.Index(froms, from)+1)
+	}
+	for _, f := range froms {
+		fmt.Fprintf(&b, "\n  %-2s %s", label(f), f)
+	}
+	fmt.Fprintf(&b, "\n  %-2s %s", "B", read)
+	var names []string
+	for _, d := range diffs {
+		fmt.Fprintf(&b, "\n  %-*s  %s %-*s  B %s", width, d.field, label(d.from), valWidth, text(d.had), text(d.got))
+		names = append(names, fmt.Sprintf("%q", d.field))
+	}
+	fmt.Fprintf(&b, "\nif the endpoints show these fields differently on purpose, add them to \"$apitest\": {\"IgnoreFields\": [%s]} and to Config.IgnoreFields of the test; otherwise check that both requests address the same %s",
+		strings.Join(names, ", "), r.Name)
+	return b.String()
 }
 
 // checkItems validates fetched elements against the schema of o's response.

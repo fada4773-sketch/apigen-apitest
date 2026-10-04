@@ -210,7 +210,7 @@ func (b *builder) details(ctx context.Context, r *model.Resource, c *checks, ite
 		if err != nil {
 			return nil, fmt.Sprintf("GET %s failed (%v)", d.url, err)
 		}
-		if !nonEmpty(body) || isEmptyObject(body) {
+		if !nonEmpty(body) {
 			return nil, fmt.Sprintf("GET %s answered without data", d.url)
 		}
 		if s := successSchema(d.op); s != nil && s.Value != nil {
@@ -329,29 +329,32 @@ func (b *builder) keepDetails(r *model.Resource, c *checks, chosen []any, answer
 			continue
 		}
 		var recs []Record
+		var origins []string
+		from := func(i int) string {
+			target, _ := b.fillDetail(r, d, chosen[i])
+			return fmt.Sprintf("GET %s (%s, followingDetails of %s #%d)", target, d.op.ID, r.Name, i+1)
+		}
 		if d.mo.Role == model.RoleList {
 			items, _ := listItems(answers[0][d.url], d.mo.Items)
 			for _, it := range items {
 				recs = append(recs, toRecord(dr, it))
+				origins = append(origins, from(0))
 			}
 			b.store.lists[d.op.ID] = items
 		} else {
-			for _, a := range answers {
+			for i, a := range answers {
 				recs = append(recs, toRecord(dr, a[d.url]))
+				origins = append(origins, from(i))
 			}
 		}
 		b.fit(dr, recs, true)
 		if b.detailOf == nil {
-			b.detailOf = map[string]detailSource{}
+			b.detailOf = map[string]*model.Op{}
 		}
-		b.detailOf[strings.ToLower(dr.Name)] = detailSource{d.mo, fmt.Sprintf("GET %s (followingDetails of %s)", d.url, r.Name)}
+		b.detailOf[strings.ToLower(dr.Name)] = d.mo
+		b.setOrigins(dr, origins)
 		b.store.set(dr, recs)
 		b.store.fetched[strings.ToLower(dr.Name)] = true
 		b.res.note(CodeSnapshot, dr.Name, "%d records from GET %s (followingDetails of %s)", len(recs), d.url, r.Name)
 	}
-}
-
-func isEmptyObject(v any) bool {
-	m, ok := v.(map[string]any)
-	return ok && len(m) == 0
 }

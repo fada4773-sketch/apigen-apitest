@@ -389,6 +389,48 @@ func TestRunSnapshotProblems(t *testing.T) {
 	}
 }
 
+// A mismatch names the record, both requests as sent and every field that
+// differs with both values, and how to fix it.
+func TestRunSnapshotMismatchMessage(t *testing.T) {
+	p := newPipeline(t, `{}`)
+	p.fetch = fakeInstance(t, seeded, "Other Name")
+	o := p.run()
+	if len(o.res.Problems) == 0 {
+		t.Fatal("no problem")
+	}
+	pr := o.res.Problems[0]
+	for _, want := range []string{
+		`for the same Dock (Id=7 Code="abc") disagree about 1 field`,
+		"A  GET /Dock (GetDocks)",
+		"B  GET /Dock/id/7 (GetDockById)",
+		`Name  A "Moon Dock"  B "Other Name"`,
+		`"IgnoreFields": ["Name"]`,
+	} {
+		if pr.Code != CodeSnapshotDiff || pr.Where != "Dock #1" || !strings.Contains(pr.Message, want) {
+			t.Errorf("message lacks %q:\n%s", want, pr)
+		}
+	}
+}
+
+// mandatoryFields: an empty object has no value either.
+func TestRunSnapshotMandatoryEmptyObject(t *testing.T) {
+	pilots := []any{
+		map[string]any{"Code": "a", "Detail": map[string]any{}},
+		map[string]any{"Code": "b", "Detail": map[string]any{"License": map[string]any{"Expires": "2030-01-01"}}},
+	}
+	p := newPipelineFile(t, "mandatory.yaml", `{"$snapshot": {"Pilot": {"from": "/Pilot", "validation": {"mandatoryFields": ["Detail"]}}}}`)
+	p.fetch = func(_ context.Context, path string) (any, error) {
+		if path == "/Pilot" {
+			return pilots, nil
+		}
+		return pilots[1], nil
+	}
+	o := p.run()
+	if recs := o.res.Records.Records("Pilot"); len(o.res.Problems) > 0 || len(recs) != 1 || recs[0]["Code"] != "b" {
+		t.Errorf("records %v, problems %v", recs, o.res.Problems)
+	}
+}
+
 // An empty list means the test starts without such records.
 func TestRunSnapshotEmpty(t *testing.T) {
 	p := newPipeline(t, `{}`)
@@ -744,7 +786,7 @@ func TestRunSnapshotValidation(t *testing.T) {
 	p.fetch = fetch
 	o = p.run()
 	if len(o.res.Problems) == 0 || o.res.Problems[0].Code != CodeSnapshotShort ||
-		!strings.Contains(o.res.Problems[0].Message, "4 pass the fields of the validation, 2 pass all of it") ||
+		!strings.Contains(o.res.Problems[0].Message, "6 returned, 4 pass the fields, 2 pass all of it") ||
 		!strings.Contains(o.res.Problems[0].Message, "GET /Ship/{code}/price failed") {
 		t.Errorf("short: %v", o.res.Problems)
 	}

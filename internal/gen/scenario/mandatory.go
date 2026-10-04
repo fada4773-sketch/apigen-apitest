@@ -20,7 +20,7 @@ import (
 // found below it. Inside a list one element with a value is enough.
 
 // hasAll reports whether every path has a value in item: not missing, not
-// null, not "" and not an empty list.
+// null, not "", not an empty list and not an empty object.
 func hasAll(item any, ref *openapi3.SchemaRef, paths [][]string) bool {
 	for _, p := range paths {
 		if !walk(item, ref, p, 0, nonEmpty) {
@@ -66,6 +66,8 @@ func nonEmpty(v any) bool {
 	case string:
 		return x != ""
 	case []any:
+		return len(x) > 0
+	case map[string]any:
 		return len(x) > 0
 	}
 	return true
