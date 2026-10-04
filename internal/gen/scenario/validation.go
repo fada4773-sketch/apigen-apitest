@@ -309,6 +309,10 @@ func (b *builder) keepDetails(r *model.Resource, c *checks, chosen []any, answer
 			}
 		}
 		b.fit(dr, recs, true)
+		if b.detailOf == nil {
+			b.detailOf = map[string]detailSource{}
+		}
+		b.detailOf[strings.ToLower(dr.Name)] = detailSource{d.mo, fmt.Sprintf("GET %s (followingDetails of %s)", d.url, r.Name)}
 		b.store.set(dr, recs)
 		b.store.fetched[strings.ToLower(dr.Name)] = true
 		b.res.note(CodeSnapshot, dr.Name, "%d records from GET %s (followingDetails of %s)", len(recs), d.url, r.Name)

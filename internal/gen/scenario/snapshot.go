@@ -335,9 +335,18 @@ func (b *builder) selectKeyed(ctx context.Context, r *model.Resource, items []an
 func (b *builder) complete(ctx context.Context, r *model.Resource, src source) {
 	recs := b.store.Records(r.Name)
 	ignore := b.in.Defaults.RunConfig().IgnoreFields
+	// where the records come from: the source, or for records from the
+	// followingDetails of another resource that request (src is empty then);
+	// it is not read again
+	origin, from := src.op, ""
+	if origin != nil {
+		from = origin.Op.ID
+	} else if d, ok := b.detailOf[strings.ToLower(r.Name)]; ok {
+		origin, from = d.op, d.desc
+	}
 	for i, rec := range recs {
 		for _, o := range r.OpsWith(model.RoleRead) {
-			if o == src.op || (i > 0 && !ownKey(o)) {
+			if o == origin || (i > 0 && !ownKey(o)) {
 				continue // a read without own key only addresses the first record
 			}
 			path, missing := b.target(o, rec)
@@ -361,7 +370,7 @@ func (b *builder) complete(ctx context.Context, r *model.Resource, src source) {
 					rec[f] = got[f]
 				case !compare.Equal(old, got[f]) && !containsFold(ignore, f):
 					b.res.problem(CodeSnapshotDiff, r.Name+"."+f, "%s #%d: %s returns %s, GET %s (%s) returns %s; the examples cannot show both",
-						r.Name, i+1, src.op.Op.ID, text(old), path, o.Op.ID, text(got[f]))
+						r.Name, i+1, from, text(old), path, o.Op.ID, text(got[f]))
 				}
 			}
 		}
@@ -370,7 +379,7 @@ func (b *builder) complete(ctx context.Context, r *model.Resource, src source) {
 		b.fieldDefaults(r, recs[0], true)
 	}
 	for _, o := range r.OpsWith(model.RoleList) {
-		if o == src.op {
+		if o == origin {
 			continue
 		}
 		path, missing := b.target(o, nil)

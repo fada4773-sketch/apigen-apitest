@@ -623,6 +623,40 @@ func hasNote(res *Result, code, text string) bool {
 	return false
 }
 
+// Records that come from the followingDetails of another resource have no
+// source of their own: completing them must not crash, and the request
+// they came from is not sent again (with the key of the first parent it
+// would mix up the records).
+func TestRunSnapshotDetailRecordsComplete(t *testing.T) {
+	asked := map[string]int{}
+	fetch := func(_ context.Context, path string) (any, error) {
+		asked[path]++
+		switch path {
+		case "/Ship":
+			return []any{map[string]any{"Id": json.Number("4"), "Code": "dd", "Pilot": "tom"}, map[string]any{"Id": json.Number("5"), "Code": "ee", "Pilot": "tom"}}, nil
+		case "/Ship/4", "/Ship/5":
+			return map[string]any{"Id": json.Number(path[6:]), "Code": map[string]string{"4": "dd", "5": "ee"}[path[6:]], "Pilot": "tom"}, nil
+		case "/Ship/4/details", "/Ship/5/details":
+			return map[string]any{"Engine": "ion", "Decks": json.Number("3")}, nil
+		case "/Ship/4/crew", "/Ship/5/crew":
+			return map[string]any{"Captain": "Pilot " + path[6:7]}, nil
+		}
+		return nil, errors.New("status 404")
+	}
+	p := newPipelineFile(t, "details.yaml", `{"$snapshot": {"Ship": {"from": "/Ship", "count": 2, "validation": {"followingDetails": ["/Ship/{id}/crew"]}}}}`)
+	p.fetch = fetch
+	o := p.run()
+	if len(o.res.Problems) > 0 {
+		t.Fatalf("problems: %v", o.res.Problems)
+	}
+	if recs := o.res.Records.Records("CrewInfo"); len(recs) != 2 || recs[1]["Captain"] != "Pilot 5" {
+		t.Errorf("crew records: %v", recs)
+	}
+	if asked["/Ship/4/crew"] != 1 || asked["/Ship/5/crew"] != 1 {
+		t.Errorf("crew asked %d and %d times, want once each", asked["/Ship/4/crew"], asked["/Ship/5/crew"])
+	}
+}
+
 // "validation": equalFields pick elements with a value, followingDetails
 // must answer for an element with its values; the list is searched until
 // "count" elements pass. The answers become the examples of their

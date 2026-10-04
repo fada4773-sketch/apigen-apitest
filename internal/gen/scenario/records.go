@@ -60,6 +60,14 @@ type builder struct {
 	v     *spec.Validator
 	// keys are the key values the defaults set: resource → field → value
 	keys map[string]map[string]keyDefault
+	// detailOf is the request of "followingDetails" the records of a
+	// resource come from, for resources without a source of their own
+	detailOf map[string]detailSource
+}
+
+type detailSource struct {
+	op   *model.Op
+	desc string
 }
 
 type keyDefault struct {

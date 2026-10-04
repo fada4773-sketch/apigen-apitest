@@ -23,6 +23,9 @@ contain breaking changes, which are listed here.
 - `"$snapshot"` validation: elements that `mandatoryFields` or
   `equalFields` reject are no longer checked against the schema, so an
   empty `{}` in a list no longer stops the run.
+- Records that come from the `followingDetails` of another resource no
+  longer crash the snapshot (nil pointer when a read returned another
+  value), and the request they came from is not sent a second time.
 - With `-base-url` nothing is taken from the examples of the spec: existing
   examples are replaced (as with `-overwrite`) and the requests of the
   snapshot no longer fill placeholders from parameter examples.
