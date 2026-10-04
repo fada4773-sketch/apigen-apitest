@@ -35,6 +35,7 @@ const (
 	CodeSnapshotWins  = "SNAPSHOT_WINS"     // a default is not used for a fetched record
 	CodeSnapshotKey   = "SNAPSHOT_KEY"      // the record a key default selects does not exist
 	CodeLint          = "LINT_IGNORED"      // a schema violation that -ignorelinting lets through
+	CodeSeed          = "SNAPSHOT_SEED"     // the "seed" values the requests below take
 	CodeUpdate        = "UPDATE"            // an update changes a record
 	CodeCreatedKey    = "CREATED_KEY"       // the server assigns a key of a created record
 	CodeInlined       = "PARAM_INLINED"     // a shared parameter was copied into the path

@@ -987,6 +987,23 @@ If something is detected wrongly, correct it in `defaults.json`:
 
 `from` is the request relative to `-base-url`, with its query. `GET ` in front is allowed, and so is an operationId (`"from": "GetBooks"`), which then sends that GET with the known parameters. The request must fit a GET of the resource in the spec, otherwise the run stops. Placeholders left in it are filled where the value is known: a key of another resource from its first record (`{Code}` of the first Book), a default (`"GetDefaultBooks.level"` or `"level"`). Parameter examples of the spec are never used. An optional query parameter without value is left out; a path or required query parameter without value stops the run with `{level} in "/DefaultBook/Level/{level}" has no value`. `$comment` is free text.
 
+**Order.** The entries of `"$snapshot"` run in the order they have in `defaults.json`; `review` writes them in the order of the paths in the spec. Resources without an entry follow, parents before their children. An entry whose placeholders are not known yet (a `{level}` a later entry seeds, a key of a parent fetched later) waits until they are, then runs. With several defaults files an entry of a later file replaces the one of the same name in its place; new ones are added at the end.
+
+**Seed.** `"seed"` names fields of the chosen elements whose values fill the placeholders in the `"from"` of other entries, so their requests need no values written by hand:
+
+```json
+"$snapshot": {
+  "Article": { "from": "/Book/abc/Article", "count": 2, "seed": ["level", "id", "code"] },
+  "Book": { "from": "/DefaultBook/Level/{level}?bookCode={code}" }
+}
+```
+
+- One set per record: with `count: 2` there are two sets (`#1` and `#2`), from the two chosen elements.
+- A placeholder takes the seed of the same name, ignoring case: `{code}` the `code` of the entry that ran last and seeds `code`, `{Article.code}` the one of `Article`. A seed wins over the other sources of a placeholder (keys of parent records, defaults). In the query the parameter is the key (`bookCode={code}` fills `bookCode`), in the path the one at that position.
+- The request is sent once per set (`/DefaultBook/Level/A1?bookCode=x` and `/DefaultBook/Level/B2?bookCode=y`); identical requests are sent once. The elements of all answers are searched together, each element once, then `validation` and `count` apply to them.
+- A seed field is a field path like in `mandatoryFields` (`"BookDetail.Level"`). An element without a value in it (missing, null, `""`) is not chosen, like with `mandatoryFields`. A name that matches no field of the response stops the run.
+- The sets live only during the run; `-v` lists them (`SNAPSHOT_SEED`). Seeds only fill `"from"` of `"$snapshot"` entries, not the lists a resource gets without an entry. An entry without `from` (generated records) seeds nothing.
+
 **Validation.** `"validation"` decides which elements of the list become records. The list is searched in order until `count` elements pass every check:
 
 ```json
@@ -1414,7 +1431,7 @@ defaults.json: 3 entries added; check them, change or delete what is wrong, then
 | Finding | Source | Fix |
 |---|---|---|
 | `heuristic`: a parameter resolved heuristically | apitest report | nothing: the examples follow the heuristic (13.5) |
-| the resources of the spec | `review` | `DEFAULT` `"$snapshot"` (with an empty `"validation"` to fill in) with the request each resource is fetched with, if the defaults have none (`SNAPSHOT_SOURCE`). Parameters with a known value are filled in: the key of a record of the last run, a default, or a record field of the same name (`bookCode` → `Code` of the first Book). The others stay placeholders (`{level}`); keys of a parent are filled by the snapshot itself. `$comment` holds the operationId and the path template with all parameters, which values were filled and from where, and what is left to replace. `ORDER` if `"$apitest"` is missing |
+| the resources of the spec | `review` | `DEFAULT` `"$snapshot"` (in the order of the paths in the spec, with an empty `"seed"` and `"validation"` to fill in) with the request each resource is fetched with, if the defaults have none (`SNAPSHOT_SOURCE`). Parameters with a known value are filled in: the key of a record of the last run, a default, or a record field of the same name (`bookCode` → `Code` of the first Book). The others stay placeholders (`{level}`); keys of a parent are filled by the snapshot itself. `$comment` holds the operationId and the path template with all parameters, which values were filled and from where, and what is left to replace. `ORDER` if `"$apitest"` is missing |
 | `binding`: a link to an unknown operation or parameter | apitest report | `SPEC`, with the closest operationId (`did you mean "getDock"?`) |
 | `auth`: `x-apitest-forbidden` without a 403 response | apitest report | `DEFAULT` `"<operationId>.x-apitest-forbidden": false`, or document a 403 |
 | `auth`: a secured operation without 401 or 403 | apitest report | `SPEC` with the response to add, or `Config.SkipAuthCases` |
@@ -1456,7 +1473,7 @@ The Swagger 2.0 conversion note needs no fix and is not listed.
 
 1. Run `apitest-gen review -spec openapi.yaml` (with `-v` for the reasons).
 2. Check the model `review` printed. Correct it with `"$model"` if a resource, a key or a role is wrong. Copy `MethodOrder`, `DeleteLast` and `Tags` of your test into `"$apitest"`.
-3. Open `defaults.json` and check the new entries at the end: in `$snapshot` compare `from` with the template in `$comment`, replace what is left as `{…}` with values that exist, set `count`, fill `validation` (fields that must be set, fields with a fixed value, detail requests that must answer); then the values. Replace fixed ids with ids that exist. Delete what is wrong and add its key to `$rejected`.
+3. Open `defaults.json` and check the new entries at the end: in `$snapshot` compare `from` with the template in `$comment`, replace what is left as `{…}` with values that exist, set `count`, order the entries and fill `seed` (fields whose values fill the placeholders of the entries below), fill `validation` (fields that must be set, fields with a fixed value, detail requests that must answer); then the values. Replace fixed ids with ids that exist. Delete what is wrong and add its key to `$rejected`.
 4. Fix what was printed as `EDIT` and `SPEC`.
 5. Run `apitest-gen -spec openapi.yaml -base-url <instance>` (or without `-base-url` for generated records). It updates `global-dict.json` and writes examples and extensions into the spec.
 6. Run `review` again. When nothing is open, it prints `nothing to review`.

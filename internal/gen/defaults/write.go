@@ -23,6 +23,35 @@ type Pair struct {
 	Value any // nil is written as null: a value still to be filled in
 }
 
+// Ordered is a JSON object that keeps the order of its keys when written.
+type Ordered []Pair
+
+// MarshalJSON writes the pairs in their order.
+func (o Ordered) MarshalJSON() ([]byte, error) {
+	var b bytes.Buffer
+	b.WriteString("{")
+	for i, p := range o {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		b.Write(encode(p.Key))
+		b.WriteString(":")
+		b.Write(encode(p.Value))
+	}
+	b.WriteString("}")
+	return b.Bytes(), nil
+}
+
+// Get returns the value of key.
+func (o Ordered) Get(key string) (any, bool) {
+	for _, p := range o {
+		if p.Key == key {
+			return p.Value, true
+		}
+	}
+	return nil, false
+}
+
 // Update adds entries to the defaults file at path and replaces its
 // "$review" block; review nil removes the block. Existing keys keep their
 // place and value, keys that already exist (ignoring case) are not added

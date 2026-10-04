@@ -41,6 +41,24 @@ func equals(item any, ref *openapi3.SchemaRef, segs []string, want any) bool {
 	})
 }
 
+// valueAt returns the first single value with a value at the path (not an
+// object, not a list, not null, not ""), or nil.
+func valueAt(item any, ref *openapi3.SchemaRef, segs []string) any {
+	var got any
+	walk(item, ref, segs, 0, func(v any) bool {
+		switch v.(type) {
+		case map[string]any, []any:
+			return false
+		}
+		if nonEmpty(v) {
+			got = v
+			return true
+		}
+		return false
+	})
+	return got
+}
+
 func nonEmpty(v any) bool {
 	switch x := v.(type) {
 	case nil:

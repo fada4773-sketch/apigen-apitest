@@ -15,7 +15,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -367,7 +366,7 @@ func recordKey(m *model.Model) func(*spec.Operation, string) bool {
 }
 
 // quietRecord notes are only listed with -v.
-var quietRecord = map[string]bool{scenario.CodeUpdate: true, scenario.CodeModel: true}
+var quietRecord = map[string]bool{scenario.CodeUpdate: true, scenario.CodeModel: true, scenario.CodeSeed: true}
 
 // checkCommand runs "apitest-gen check"; exit code 1 means problems.
 func checkCommand(o *options, stdout, stderr io.Writer) int {
@@ -422,7 +421,8 @@ func reviewCommand(o *options, out io.Writer) error {
 	if defs.Run == nil && len(m.Resources) > 0 {
 		fmt.Fprintf(out, "  %-21s the examples follow apitest's default order; if the test sets MethodOrder, DeleteLast or Tags, copy them into %q in %s\n", "ORDER", defaults.ApitestKey, firstDefaults(o))
 	}
-	res := review.Run(review.Input{Spec: s, Dict: d, DictNotes: notes, Defaults: defs, GenericIDs: ids, Apply: applied, Model: m})
+	res := review.Run(review.Input{Spec: s, Dict: d, DictNotes: notes, Defaults: defs, GenericIDs: ids, Apply: applied, Model: m,
+		PathOrder: yamldoc.Keys(yamldoc.Get(doc.Root, "paths"))})
 	fmt.Fprintf(out, "review: %d suggestions; %d defaults proposed, %d values to choose, %d defaults to correct, %d fixed by apply, %d to fix in the spec\n",
 		len(res.Suggestions), res.Count(review.ActionDefault), res.Count(review.ActionChoose), res.Count(review.ActionEdit), res.Count(review.ActionApply), res.Count(review.ActionSpec))
 	for _, sg := range res.Suggestions {
@@ -435,12 +435,14 @@ func reviewCommand(o *options, out io.Writer) error {
 		} else if sg.Key != "" {
 			line = fmt.Sprintf("%s  (%s at %s: %s)", sg.Key, sg.Finding, sg.Where, sg.Message)
 		}
-		if m, ok := sg.Value.(map[string]any); ok && sg.Key == defaults.SnapshotKey {
+		if entries, ok := sg.Value.(defaults.Ordered); ok && sg.Key == defaults.SnapshotKey {
 			line = fmt.Sprintf("%s  (%s at %s)", sg.Key, sg.Finding, sg.Where)
 			fmt.Fprintf(out, "  %-8s %s\n", sg.Action, line)
-			for _, name := range slices.Sorted(maps.Keys(m)) {
-				e, _ := m[name].(map[string]any)
-				fmt.Fprintf(out, "           %s: from %v  (%v)\n", name, e["from"], e["$comment"])
+			for _, p := range entries {
+				e, _ := p.Value.(defaults.Ordered)
+				from, _ := e.Get("from")
+				comment, _ := e.Get("$comment")
+				fmt.Fprintf(out, "           %s: from %v  (%v)\n", p.Key, from, comment)
 			}
 			continue
 		}

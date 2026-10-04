@@ -77,6 +77,9 @@ type Input struct {
 	// Model is the resource model; path parameters that hold a record key
 	// get their example from the records, so they need no default.
 	Model *model.Model
+	// PathOrder are the paths in the order of the spec file; "$snapshot"
+	// lists the resources in this order. Without it they follow by name.
+	PathOrder []string
 }
 
 type reviewer struct {
@@ -141,8 +144,12 @@ func (r *reviewer) snapshot() {
 	if r.in.Model == nil || len(r.in.Defaults.Snapshot) > 0 {
 		return
 	}
-	v := map[string]any{}
-	var names, open []string
+	type entry struct {
+		res *model.Resource
+		o   *model.Op
+		pos int
+	}
+	var entries []entry
 	for _, res := range r.in.Model.Resources {
 		o := scenario.AutoSource(res)
 		if o == nil {
@@ -151,6 +158,19 @@ func (r *reviewer) snapshot() {
 		if o == nil {
 			continue
 		}
+		pos := slices.Index(r.in.PathOrder, o.Op.Path)
+		if pos < 0 {
+			pos = len(r.in.PathOrder)
+		}
+		entries = append(entries, entry{res, o, pos})
+	}
+	// in the order of the spec: the snapshot runs them in the order of the
+	// defaults, so a "seed" can fill the requests below it
+	slices.SortStableFunc(entries, func(a, b entry) int { return a.pos - b.pos })
+	var v defaults.Ordered
+	var names, open []string
+	for _, e := range entries {
+		res, o := e.res, e.o
 		from := map[string]string{}
 		target, unknown := scenario.Fill(o, r.value(o, from))
 		comment := scenario.Template(o)
@@ -179,8 +199,17 @@ func (r *reviewer) snapshot() {
 			comment += "; replace {" + strings.Join(missing, "}, {") + "} with values that exist in the instance"
 			open = append(open, res.Name)
 		}
-		v[res.Name] = map[string]any{"from": target, "count": 1, "$comment": comment,
-			"validation": map[string]any{"mandatoryFields": []string{}, "equalFields": map[string]any{}, "followingDetails": []string{}}}
+		v = append(v, defaults.Pair{Key: res.Name, Value: defaults.Ordered{
+			{Key: "from", Value: target},
+			{Key: "count", Value: 1},
+			{Key: "seed", Value: []string{}},
+			{Key: "validation", Value: defaults.Ordered{
+				{Key: "mandatoryFields", Value: []string{}},
+				{Key: "equalFields", Value: map[string]any{}},
+				{Key: "followingDetails", Value: []string{}},
+			}},
+			{Key: "$comment", Value: comment},
+		}})
 		names = append(names, res.Name)
 	}
 	if len(v) == 0 {

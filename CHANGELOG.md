@@ -16,6 +16,13 @@ contain breaking changes, which are listed here.
 
 ### Features
 
+- `"$snapshot"` runs in the order of `defaults.json`; `review` writes the
+  entries in the order of the paths in the spec, with an empty `"seed"`.
+- `"seed"` in a `"$snapshot"` entry keeps fields of the chosen elements,
+  one set per record. A later `"from"` takes them as placeholders
+  (`{code}`, `{Book.code}`) and is sent once per set; the elements of all
+  answers are searched together. Elements without a value in a seed field
+  are not chosen.
 - `apitest-gen -debug` saves `global-dict.json` even if the run fails; the
   spec stays unchanged.
 - `apitest-gen -ignorelinting` lists fetched data and examples that violate

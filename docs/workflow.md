@@ -30,23 +30,27 @@ apitest-gen review -spec openapi.yaml
 ```json
 {
   "$snapshot": {
-    "Article": {
-      "$comment": "GetArticles: /Book/{Code}/Article; filled: Code = Code of the first Book",
-      "count": 1,
-      "from": "/Book/abc/Article",
-      "validation": { "mandatoryFields": [], "equalFields": {}, "followingDetails": [] }
-    },
     "Book": {
-      "$comment": "GetDefaultBooks: /DefaultBook/Level/{level}?bookCode={bookCode}&isbn={isbn}; filled: bookCode = Code of the first Book; replace {level} with values that exist in the instance",
-      "count": 1,
       "from": "/DefaultBook/Level/{level}?bookCode=abc",
-      "validation": { "mandatoryFields": [], "equalFields": {}, "followingDetails": [] }
+      "count": 1,
+      "seed": [],
+      "validation": { "mandatoryFields": [], "equalFields": {}, "followingDetails": [] },
+      "$comment": "GetDefaultBooks: /DefaultBook/Level/{level}?bookCode={bookCode}&isbn={isbn}; filled: bookCode = Code of the first Book; replace {level} with values that exist in the instance"
+    },
+    "Article": {
+      "from": "/Book/abc/Article",
+      "count": 1,
+      "seed": [],
+      "validation": { "mandatoryFields": [], "equalFields": {}, "followingDetails": [] },
+      "$comment": "GetArticles: /Book/{Code}/Article; filled: Code = Code of the first Book"
     }
   }
 }
 ```
 
 `from` is the request the records are fetched with. What `review` knows is filled in, and `$comment` says from where, so you can check it against the template. `{level}` is unknown: write a level that exists (`/DefaultBook/Level/A1?bookCode=abc`). In `validation` you say which books qualify: `"mandatoryFields": ["Book.Author"]` (must be set), `"equalFields": {"Book.Author": "tom"}` (must have this value), `"followingDetails": ["/book/{id}/details"]` (must answer for the book). The list is searched until `count` books pass, and the answers of the detail requests become examples too. Before the first run no record is known; then a parent key stays a placeholder (`/Book/{Code}/Article`), and the snapshot fills it from the first Book.
+
+The entries are in the order of the paths in the spec, and they run in the order of the file. Move an entry up if another one needs its values. `seed` keeps fields of the chosen elements for the entries below it: with `"Article": {"from": "/Book/abc/Article", "count": 2, "seed": ["level", "code"]}` above `"Book": {"from": "/DefaultBook/Level/{level}?bookCode={code}"}`, the books are fetched once per article, with its `level` and `code`, and you write no level by hand (see [configuration.md](configuration.md#where-the-records-come-from)).
 
 and what you add by hand:
 
@@ -71,7 +75,7 @@ and what you add by hand:
 | the model | Does every resource have the right DTOs and keys? Correct it with `"$model": {"Book": {"keys": [...]}}`. |
 | `ORDER` | Copy `MethodOrder`, `DeleteLast` and `Tags` of your test into `"$apitest"`. If they differ, the examples follow another order than the run. |
 | an endpoint apitest does not test | Delete `from` in its `$snapshot` entry: its examples are only generated, nothing is fetched. |
-| `$snapshot` | Is it the right list? Are the filled parameters right (compare with `$comment`)? Replace every `{…}` that is not a parent key. Raise `count` for more list elements. Fill `validation`: required fields, fixed values, detail requests. |
+| `$snapshot` | Is it the right list? Are the filled parameters right (compare with `$comment`)? Replace every `{…}` that is not a parent key. Raise `count` for more list elements. Order the entries; put fields that the requests below need into `seed` and use them there as `{name}`. Fill `validation`: required fields, fixed values, detail requests. |
 | a fixed id (`"/path/{id}": 275`) | Replace it with an id that exists in the test environment, or delete it. |
 | a proposal you deleted | Add its key to `"$rejected": ["GetBook.Code"]`, so `review` does not propose it again. |
 | a problem printed as `SPEC` | Only a change of `openapi.yaml` helps, e.g. a missing 401. Do it by hand. |

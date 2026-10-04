@@ -21,6 +21,13 @@ type checks struct {
 	paths     [][]string
 	equal     []equalCheck
 	details   []detail
+	seeds     []seedField // "seed": must have a value like mandatoryFields
+}
+
+// seedField is a field of "seed": its name as written and its path.
+type seedField struct {
+	name string
+	segs []string
 }
 
 type equalCheck struct {
@@ -37,12 +44,19 @@ type detail struct {
 	mo  *model.Op // nil if the operation belongs to no resource
 }
 
-func (c *checks) active() bool { return len(c.paths)+len(c.equal)+len(c.details) > 0 }
+func (c *checks) active() bool {
+	return len(c.paths)+len(c.equal)+len(c.details)+len(c.seeds) > 0
+}
 
 // cheap reports whether item passes the checks that need no request.
 func (c *checks) cheap(item any) bool {
 	if !hasAll(item, c.ref, c.paths) {
 		return false
+	}
+	for _, s := range c.seeds {
+		if valueAt(item, c.ref, s.segs) == nil {
+			return false
+		}
 	}
 	for _, e := range c.equal {
 		if !equals(item, c.ref, e.segs, e.want) {
@@ -64,6 +78,13 @@ func (c *checks) describe() string {
 			eq = append(eq, fmt.Sprintf("%s=%s", e.name, text(e.want)))
 		}
 		parts = append(parts, "equalFields "+strings.Join(eq, ", "))
+	}
+	if len(c.seeds) > 0 {
+		var names []string
+		for _, s := range c.seeds {
+			names = append(names, s.name)
+		}
+		parts = append(parts, fmt.Sprintf("seed %v", names))
 	}
 	if len(c.details) > 0 {
 		var urls []string
@@ -106,6 +127,17 @@ func (b *builder) compile(r *model.Resource, src source) (*checks, bool) {
 			continue
 		}
 		c.equal = append(c.equal, equalCheck{name: name, segs: segs, want: spec.Normalize(v.EqualFields[name])})
+	}
+	for _, name := range src.seed {
+		if name = strings.TrimSpace(name); name == "" {
+			continue
+		}
+		segs := strings.Split(name, ".")
+		if !resolvable(c.ref, segs, 0) {
+			b.res.problem(CodeSnapshotFail, where, "seed: %q matches no field of the response of %s; check the names", name, src.op.Op.ID)
+			continue
+		}
+		c.seeds = append(c.seeds, seedField{name: name, segs: segs})
 	}
 	for _, raw := range v.FollowingDetails {
 		if raw = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), "GET ")); raw == "" {

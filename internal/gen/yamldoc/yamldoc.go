@@ -129,6 +129,18 @@ func Get(n *yaml.Node, key string) *yaml.Node {
 	return nil
 }
 
+// Keys returns the keys of mapping n in document order.
+func Keys(n *yaml.Node) []string {
+	if n == nil || n.Kind != yaml.MappingNode {
+		return nil
+	}
+	keys := make([]string, 0, len(n.Content)/2)
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		keys = append(keys, n.Content[i].Value)
+	}
+	return keys
+}
+
 // Path follows keys from n; numeric keys index sequences.
 func Path(n *yaml.Node, keys ...string) *yaml.Node {
 	for _, k := range keys {

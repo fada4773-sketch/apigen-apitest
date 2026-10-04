@@ -84,23 +84,42 @@ func IsURL(from string) bool {
 	return strings.HasPrefix(from, "/") || strings.HasPrefix(from, "GET ")
 }
 
-// fillURL completes a request written in "$snapshot": placeholders that are
-// left are filled like the parameters of o (keys of records, defaults).
-// missing names the first placeholder without value; an optional query
-// parameter without value is dropped.
-func (b *builder) fillURL(o *model.Op, raw string, rec Record) (string, string) {
+// fillURL completes a request written in "$snapshot": a placeholder takes
+// the value of seed (the "seed" of an earlier entry), else it is filled
+// like the parameters of o (keys of records, defaults). The parameter of a
+// path placeholder is the one at its position, of a query placeholder the
+// one of its key, so {code} may fill bookCode. missing names the first
+// placeholder without value; an optional query parameter without value is
+// dropped.
+func (b *builder) fillURL(o *model.Op, raw string, rec Record, seed func(name string) any) (string, string) {
 	raw = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), "GET "))
 	path, query, _ := strings.Cut(raw, "?")
 	segs := strings.Split(path, "/")
+	tmpl := strings.Split(o.Op.Path, "/")
 	for i, seg := range segs {
 		name, ok := placeholder(seg)
 		if !ok {
 			continue
 		}
 		p := specParam(o.Op, name)
-		v := b.paramValue(o, p, rec, false)
-		if p == nil || v == nil {
+		if p == nil && len(tmpl) == len(segs) {
+			if at, ok := placeholder(tmpl[i]); ok {
+				p = specParam(o.Op, at)
+			}
+		}
+		var v any
+		if seed != nil {
+			v = seed(name)
+		}
+		if v == nil {
+			v = b.paramValue(o, p, rec, false)
+		}
+		if v == nil {
 			return "", "{" + name + "}"
+		}
+		if p == nil {
+			segs[i] = url.PathEscape(params.Scalar(v))
+			continue
 		}
 		s, err := params.Path(p, v)
 		if err != nil {
@@ -121,7 +140,16 @@ func (b *builder) fillURL(o *model.Op, raw string, rec Record) (string, string) 
 			continue
 		}
 		p := queryParam(o, name)
-		v := b.paramValue(o, p, rec, false)
+		if p == nil {
+			p = queryParam(o, k)
+		}
+		var v any
+		if seed != nil {
+			v = seed(name)
+		}
+		if v == nil {
+			v = b.paramValue(o, p, rec, false)
+		}
 		switch {
 		case v != nil:
 			pairs = append(pairs, k+"="+url.QueryEscape(params.Scalar(v)))

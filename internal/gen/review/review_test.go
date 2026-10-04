@@ -158,13 +158,15 @@ func TestReviewModel(t *testing.T) {
 	}
 	ids := []string{"id"}
 	res := apply.Apply(doc, s, d, defs, apply.Options{Seed: 1, GenericIDs: ids})
-	r := Run(Input{Spec: s, Dict: d, DictNotes: notes, Defaults: defs, GenericIDs: ids, Apply: res, Model: model.Detect(s, nil)})
+	// the entries follow the order of the paths in the spec, not the names
+	r := Run(Input{Spec: s, Dict: d, DictNotes: notes, Defaults: defs, GenericIDs: ids, Apply: res, Model: model.Detect(s, nil),
+		PathOrder: yamldoc.Keys(yamldoc.Get(doc.Root, "paths"))})
 	got := map[string]string{}
 	for _, p := range r.Changes() {
 		b, _ := json.Marshal(p.Value)
 		got[p.Key] = string(b)
 	}
-	want := map[string]string{defaults.SnapshotKey: `{"Moon":{"$comment":"listMoonsOfPlanet: /Planet/id/{id}/Moon; {id} is the Id of the first Planet","count":1,"from":"/Planet/id/{id}/Moon","validation":{"equalFields":{},"followingDetails":[],"mandatoryFields":[]}},"Planet":{"$comment":"listPlanets: /Planet","count":1,"from":"/Planet","validation":{"equalFields":{},"followingDetails":[],"mandatoryFields":[]}}}`}
+	want := map[string]string{defaults.SnapshotKey: `{"Planet":{"from":"/Planet","count":1,"seed":[],"validation":{"mandatoryFields":[],"equalFields":{},"followingDetails":[]},"$comment":"listPlanets: /Planet"},"Moon":{"from":"/Planet/id/{id}/Moon","count":1,"seed":[],"validation":{"mandatoryFields":[],"equalFields":{},"followingDetails":[]},"$comment":"listMoonsOfPlanet: /Planet/id/{id}/Moon; {id} is the Id of the first Planet"}}`}
 	if len(got) != len(want) || got[defaults.SnapshotKey] != want[defaults.SnapshotKey] {
 		t.Errorf("got %v", got)
 	}
@@ -201,7 +203,7 @@ func TestReviewSnapshotURL(t *testing.T) {
 		t.Fatalf("no $snapshot proposed: %+v", r.Suggestions)
 	}
 	got, _ := json.Marshal(sg.Value)
-	want := `{"Dock":{"$comment":"GetDefaultDocks: /DefaultDock/Level/{level}?dockCode={dockCode}&twoDigitCode={twoDigitCode}&pilotNumber={pilotNumber}; filled: dockCode = Code of the first Dock; replace {level} with values that exist in the instance","count":1,"from":"/DefaultDock/Level/{level}?dockCode=abc","validation":{"equalFields":{},"followingDetails":[],"mandatoryFields":[]}}}`
+	want := `{"Dock":{"from":"/DefaultDock/Level/{level}?dockCode=abc","count":1,"seed":[],"validation":{"mandatoryFields":[],"equalFields":{},"followingDetails":[]},"$comment":"GetDefaultDocks: /DefaultDock/Level/{level}?dockCode={dockCode}&twoDigitCode={twoDigitCode}&pilotNumber={pilotNumber}; filled: dockCode = Code of the first Dock; replace {level} with values that exist in the instance"}}`
 	if g := strings.ReplaceAll(string(got), `\u0026`, "&"); g != want {
 		t.Errorf("got  %s\nwant %s", g, want)
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -21,23 +22,17 @@ type source struct {
 	checks   defaults.Validation // "validation" of "$snapshot"
 	url      string              // the request written in "$snapshot", "" to build it from op
 	count    int
-	explicit bool // from "$snapshot"
-}
-
-// path is the request of the source; missing names a placeholder without
-// value.
-func (b *builder) path(r *model.Resource, src source) (string, string) {
-	if src.url != "" {
-		return b.fillURL(src.op, src.url, b.keyRecord(r))
-	}
-	return b.target(src.op, b.keyRecord(r))
+	explicit bool     // from "$snapshot"
+	seed     []string // "seed" of "$snapshot"
 }
 
 // snapshot fetches the records from the running instance. Only GETs are
-// sent: first the source of every resource whose parameters are known
-// (a list without parameters, then lists below records fetched so far),
-// then the reads of every record, to complete and cross-check them, and
-// the other lists, whose elements the list examples show.
+// sent: first the source of every resource whose parameters are known, in
+// the order of "$snapshot" in the defaults, then the other resources (a
+// list without parameters, then lists below records fetched so far); an
+// entry whose placeholders are not known yet waits for the ones after it.
+// Then the reads of every record, to complete and cross-check them, and the
+// other lists, whose elements the list examples show.
 func (b *builder) snapshot(ctx context.Context) {
 	b.keyDefaults()
 	sources := map[*model.Resource]source{}
@@ -46,7 +41,7 @@ func (b *builder) snapshot(ctx context.Context) {
 			sources[r] = src
 		}
 	}
-	pending := ordered(b.in.Model)
+	pending := b.runOrder()
 	for progress := true; progress && len(pending) > 0; {
 		progress = false
 		var rest []*model.Resource
@@ -59,6 +54,9 @@ func (b *builder) snapshot(ctx context.Context) {
 			if entry, has := b.in.Defaults.SnapshotFor(r.Name); has && strings.TrimSpace(entry.From) == "" {
 				b.generated(r)
 				b.res.note(CodeGenerated, r.Name, "\"$snapshot\" has no \"from\": the records are generated, nothing is fetched")
+				if len(entry.Seed) > 0 {
+					b.res.note(CodeSeed, r.Name, "\"seed\" is not used: generated values do not exist in the instance")
+				}
 				progress = true
 				continue
 			}
@@ -74,19 +72,19 @@ func (b *builder) snapshot(ctx context.Context) {
 				progress = true
 				continue
 			}
-			path, missing := b.path(r, src)
+			paths, missing := b.requests(r, src)
 			if missing != "" {
 				rest = append(rest, r)
 				continue
 			}
 			progress = true
-			b.fetchSource(ctx, r, src, path)
+			b.fetchSource(ctx, r, src, paths)
 		}
 		pending = rest
 	}
 	for _, r := range pending {
 		src := sources[r]
-		_, missing := b.path(r, src)
+		_, missing := b.requests(r, src)
 		if r.Parent != nil && b.store.Fetched(r.Parent.Name) && len(b.store.Records(r.Parent.Name)) == 0 {
 			b.store.set(r, nil)
 			b.store.fetched[strings.ToLower(r.Name)] = true
@@ -109,6 +107,25 @@ func (b *builder) snapshot(ctx context.Context) {
 	}
 }
 
+// runOrder returns the resources with a "$snapshot" entry in the order of
+// the defaults, then the others, parents before their children.
+func (b *builder) runOrder() []*model.Resource {
+	var out []*model.Resource
+	for _, name := range b.in.Defaults.SnapshotOrder() {
+		for _, r := range b.in.Model.Resources {
+			if strings.EqualFold(r.Name, name) && !slices.Contains(out, r) {
+				out = append(out, r)
+			}
+		}
+	}
+	for _, r := range ordered(b.in.Model) {
+		if !slices.Contains(out, r) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // source picks the operation the records of r come from: "$snapshot", or
 // the list of r with the fewest parameters, all of them keys of a parent.
 func (b *builder) source(r *model.Resource) (source, bool) {
@@ -118,7 +135,7 @@ func (b *builder) source(r *model.Resource) (source, bool) {
 		}
 		if IsURL(s.From) {
 			src, ok := b.urlSource(r, s.From, s.Records())
-			src.checks = s.Checks()
+			src.checks, src.seed = s.Checks(), s.Seed
 			return src, ok
 		}
 		o := b.in.Model.OpByID(s.From)
@@ -128,7 +145,7 @@ func (b *builder) source(r *model.Resource) (source, bool) {
 		case o.Resource != r || o.Op.Method != http.MethodGet:
 			b.res.problem(CodeSnapshotFail, "$snapshot."+r.Name, "%s is not a GET of %s", s.From, r.Name)
 		default:
-			return source{op: o, count: s.Records(), explicit: true, checks: s.Checks()}, true
+			return source{op: o, count: s.Records(), explicit: true, checks: s.Checks(), seed: s.Seed}, true
 		}
 		return source{}, false
 	}
@@ -200,23 +217,33 @@ func paramExample(doc *yamldoc.Doc, op *spec.Operation, p *openapi3.Parameter) a
 	return nil
 }
 
-// fetchSource fetches the records of r.
-func (b *builder) fetchSource(ctx context.Context, r *model.Resource, src source, path string) {
-	body, err := b.in.Fetch(ctx, path)
-	b.res.Stats.Fetched++
-	if err != nil {
-		b.res.problem(CodeSnapshotFail, r.Name, "GET %s (%s): %v", path, src.op.Op.ID, err)
-		return
-	}
-	items := []any{body}
-	if src.op.Role == model.RoleList {
-		list, ok := listItems(body, src.op.Items)
-		if !ok {
-			b.res.problem(CodeSnapshotFail, r.Name, "GET %s (%s) returned no list", path, src.op.Op.ID)
+// fetchSource fetches the records of r: the elements of all requests (one
+// per seed set) are searched together, each element once.
+func (b *builder) fetchSource(ctx context.Context, r *model.Resource, src source, paths []string) {
+	var items []any
+	for _, p := range paths {
+		body, err := b.in.Fetch(ctx, p)
+		b.res.Stats.Fetched++
+		if err != nil {
+			b.res.problem(CodeSnapshotFail, r.Name, "GET %s (%s): %v", p, src.op.Op.ID, err)
 			return
 		}
-		items = list
+		got := []any{body}
+		if src.op.Role == model.RoleList {
+			list, ok := listItems(body, src.op.Items)
+			if !ok {
+				b.res.problem(CodeSnapshotFail, r.Name, "GET %s (%s) returned no list", p, src.op.Op.ID)
+				return
+			}
+			got = list
+		}
+		for _, item := range got {
+			if !slices.ContainsFunc(items, func(seen any) bool { return compare.Equal(seen, item) }) {
+				items = append(items, item)
+			}
+		}
 	}
+	path := strings.Join(paths, ", ")
 	all := len(items)
 	c, ok := b.compile(r, src)
 	if !ok {
@@ -267,6 +294,7 @@ func (b *builder) fetchSource(ctx context.Context, r *model.Resource, src source
 		b.res.note(CodeSnapshotEmpty, r.Name, "GET %s (%s) returned no elements: the test starts without %s records, the examples show only the ones it creates", path, src.op.Op.ID, r.Name)
 		return
 	}
+	b.keepSeeds(r, c, chosen[:src.count])
 	b.keepDetails(r, c, chosen, answers)
 	items = chosen
 	var recs []Record

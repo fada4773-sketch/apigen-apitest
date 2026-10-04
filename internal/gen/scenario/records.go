@@ -63,6 +63,8 @@ type builder struct {
 	// detailOf is the request of "followingDetails" the records of a
 	// resource come from, for resources without a source of their own
 	detailOf map[string]detailSource
+	// seeds are the "seed" values of the entries fetched so far, in order
+	seeds []seedSets
 }
 
 type detailSource struct {

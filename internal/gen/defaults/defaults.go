@@ -74,6 +74,8 @@ type Defaults struct {
 	Rejected []string
 	// Snapshot are the entries of "$snapshot" by resource name.
 	Snapshot map[string]Snapshot
+	// snapshotOrder are the names of Snapshot in file order.
+	snapshotOrder []string
 	// Model are the entries of "$model" by resource name.
 	Model map[string]ModelFix
 	// Run is "$apitest"; nil if the file has none.

@@ -230,6 +230,31 @@ func TestSpecialKeysMerge(t *testing.T) {
 	}
 }
 
+// "$snapshot" keeps the order of the file; a later file replaces an entry
+// in its place and adds new ones at the end. "seed" is read.
+func TestSnapshotOrderAndSeed(t *testing.T) {
+	dir := t.TempDir()
+	a, b := filepath.Join(dir, "a.json"), filepath.Join(dir, "b.json")
+	_ = os.WriteFile(a, []byte(`{"$snapshot": {"Ship": {"from": "/Ship"}, "Book": {"from": "/Book", "count": 2, "seed": ["code", "level"]}, "Dock": {"from": "/Dock"}}}`), 0o600)
+	_ = os.WriteFile(b, []byte(`{"$snapshot": {"Pilot": {"from": "/Pilot"}, "Book": {"from": "/Book/A1"}}}`), 0o600)
+	d, err := Load(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(d.SnapshotOrder(), ","); got != "Ship,Book,Dock" {
+		t.Errorf("order %s", got)
+	}
+	if s, _ := d.SnapshotFor("book"); strings.Join(s.Seed, ",") != "code,level" {
+		t.Errorf("seed %v", s.Seed)
+	}
+	if d, err = LoadAll(a + "," + b); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(d.SnapshotOrder(), ","); got != "Ship,Book,Dock,Pilot" {
+		t.Errorf("merged order %s", got)
+	}
+}
+
 func TestSnapshotValidation(t *testing.T) {
 	d, err := Parse([]byte(`{"$snapshot": {"Book": {"from": "/Book", "mandatoryFields": ["Isbn"], "validation": {
 		"mandatoryFields": ["Book.Author"], "equalFields": {"Book.Author": "tom", "Book.Pages": 120},

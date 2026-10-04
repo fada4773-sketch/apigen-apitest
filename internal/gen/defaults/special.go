@@ -30,6 +30,12 @@ type Snapshot struct {
 	// Mandatory is the place of "mandatoryFields" before "validation"; it
 	// still works and adds to Validation.MandatoryFields.
 	Mandatory []string `json:"mandatoryFields,omitempty"`
+	// Seed are fields of the chosen elements ("code", "BookDetail.Level")
+	// whose values fill the placeholders of the "from" of later entries:
+	// {code} takes the last seeded "code", {Book.code} the one of Book. One
+	// set per record; an element without a value in a seed field is not
+	// chosen.
+	Seed []string `json:"seed,omitempty"`
 }
 
 // Validation is what an element of the list must fulfil to become a record.
@@ -94,7 +100,12 @@ func (d *Defaults) special(key string, raw json.RawMessage) (handled bool, err e
 				return true, fmt.Errorf("%q: count of %q must be 1 or more", key, name)
 			}
 		}
+		order, err := objectKeys(raw)
+		if err != nil {
+			return true, fmt.Errorf("%q: %w", key, err)
+		}
 		d.Snapshot = m
+		d.snapshotOrder = order
 	case ModelKey:
 		m := map[string]ModelFix{}
 		if err := strict(raw, &m); err != nil {
@@ -153,6 +164,39 @@ func (d *Defaults) SnapshotFor(resource string) (Snapshot, bool) {
 	return Snapshot{}, false
 }
 
+// SnapshotOrder returns the resources of "$snapshot" in the order of the
+// file; the snapshot runs them in this order. Entries set without a file
+// follow by name.
+func (d *Defaults) SnapshotOrder() []string {
+	var out []string
+	for _, name := range d.snapshotOrder {
+		if _, ok := d.Snapshot[name]; ok {
+			out = append(out, name)
+		}
+	}
+	var rest []string
+	for name := range d.Snapshot {
+		if !slices.Contains(out, name) {
+			rest = append(rest, name)
+		}
+	}
+	slices.Sort(rest)
+	return append(out, rest...)
+}
+
+// objectKeys returns the keys of a JSON object in file order.
+func objectKeys(raw json.RawMessage) ([]string, error) {
+	pairs, err := rawPairs(raw)
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]string, len(pairs))
+	for i, p := range pairs {
+		keys[i] = p.key
+	}
+	return keys, nil
+}
+
 // RunConfig returns "$apitest", or the apitest defaults if there is none.
 func (d *Defaults) RunConfig() Run {
 	if d.Run == nil {
@@ -164,11 +208,16 @@ func (d *Defaults) RunConfig() Run {
 // mergeSpecial takes the special entries of a later file: a resource
 // replaces the one with the same name, "$apitest" replaces the whole entry.
 func (d *Defaults) mergeSpecial(other *Defaults) {
-	for name, s := range other.Snapshot {
+	// a resource keeps its place; new ones follow in the order of the later
+	// file
+	for _, name := range other.snapshotOrder {
 		if d.Snapshot == nil {
 			d.Snapshot = map[string]Snapshot{}
 		}
-		d.Snapshot[name] = s
+		if _, ok := d.Snapshot[name]; !ok {
+			d.snapshotOrder = append(d.snapshotOrder, name)
+		}
+		d.Snapshot[name] = other.Snapshot[name]
 	}
 	for name, f := range other.Model {
 		if d.Model == nil {
